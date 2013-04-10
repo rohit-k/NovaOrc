@@ -17,12 +17,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.config import cfg
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import conductor
 from nova.db import base
 from nova import manager
 from nova import network
+from nova.openstack.common import importutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
@@ -37,7 +39,95 @@ from nova import volume
 
 LOG = logging.getLogger(__name__)
 
-HYPERVISOR_ACK = 'hypervisor_ack'
+
+reservation_driver_opts = [
+    cfg.StrOpt('reserve_instances_driver',
+               default='nova.orc.states.plugins.reserve_instances.'
+               'ReserveInstancesDriver',
+               help='Default driver for reserving instances'),
+    cfg.StrOpt('reserve_networks_driver',
+               default='nova.orc.states.plugins.reserve_networks.'
+               'ReserveNetworksDriver',
+               help='Default driver for reserving networks'),
+    cfg.StrOpt('reserve_volumes_driver',
+               default='nova.orc.states.plugins.reserve_volumes.'
+               'ReserveVolumesDriver',
+               help='Default driver for reserving volumes'),
+]
+
+provisioning_driver_opts = [
+    cfg.StrOpt('provision_instances_driver',
+        default='nova.orc.states.plugins.provision_instances.'
+                'ProvisionInstancesDriver',
+        help='Default driver for provisioning instances'),
+    cfg.StrOpt('provision_networks_driver',
+        default='nova.orc.states.plugins.provision_networks.'
+                'ProvisionNetworksDriver',
+        help='Default driver for provisioning networks'),
+    cfg.StrOpt('provision_volumes_driver',
+        default='nova.orc.states.plugins.provision_volumes.'
+                'ProvisionVolumesDriver',
+        help='Default driver for provisioning volumes'),
+]
+
+
+CONF = cfg.CONF
+CONF.register_opts(reservation_driver_opts, group='orchestration')
+CONF.register_opts(provisioning_driver_opts, group='orchestration')
+
+
+class TrackedWorkflow(object):
+    def __init__(self, db, context):
+        self.db = db
+        self.context = context
+
+    def _get_tracking_id(self):
+        tracking_id = utils.generate_uid('r')
+        # TODO(harlowja): Attach the tracking id to the resource in the db.
+        return tracking_id
+
+    def _get_history(self, resource):
+        # TODO(harlowja): get the list of workflows + states already performed
+        # on this resource...
+        return []
+
+    def run(self, chains, resource, *args, **kwargs):
+        if not resource.reservation_id:
+            # Have to start tracking this resource
+            resource.tracking_id = self._get_tracking_id()
+
+        resource_history = self._get_history(resource)
+
+        def change_tracker(context, state, state_name, chain, **kwargs):
+            if state == wf_states.COMPLETE:
+                full_name = "%s:%s" % (chain.name, state_name)
+                resource_history.append(full_name)
+                # TODO(harlowja): save it to the database so that the resource
+                # request can be tracked as to what is occuring to that resource
+                # as it moves between states...
+                result = kwargs.get('result')
+                # Also save the result of that state change so that if later
+                # resumed that it can be resumed by a future 'orc' and possibly
+                # rolled-back by that future orc as well...
+
+        def result_fetcher(context, state_name, chain):
+            full_name = "%s:%s" % (chain.name, state_name)
+            if full_name in resource_history:
+                # Already have ran this flow + state, so lets send
+                # back its previous results (so that rollback can work
+                # correctly)
+                #
+                # TODO(harlowja): actually get the real object that was saved
+                # when it completed previously...
+                return {}
+            else:
+                return None
+
+        for c in chains:
+            if self not in c.listeners:
+                c.listeners.append(self)
+            c.result_fetcher = result_fetcher
+            c.run(self.context, resource, *args, **kwargs)
 
 
 class OrchestrationManager(manager.Manager):
@@ -66,23 +156,6 @@ class OrchestrationManager(manager.Manager):
     def _create_resource(self, **kwargs):
         """Return an instance of a Compute resource object"""
         return compute_resource.Create(**kwargs)
-
-    def _create_db_entry_for_workflow_request(self, context,
-                                                  workflow_status,
-                                                  workflow_type_id,
-                                                  workflow_id,
-                                                  instance_uuid=None):
-        """Create an entry in the db and initiate a new workflow request
-        for this state chain performer.
-        """
-        values = {'status': workflow_status,
-                  'workflow_type_id': workflow_type_id,
-                  'current_workflow_id': workflow_id,
-                  'instance_uuid': instance_uuid}
-        elevated = context.elevated()
-        workflow_request = self.db.workflow_request_create(elevated, values)
-
-        return workflow_request
 
     def fulfill_compute_create(self, context, **kwargs):
         # The following set of stages are compose a compute resource
@@ -142,56 +215,50 @@ class OrchestrationManager(manager.Manager):
         # for a level of sanity that we will accept before we start mucking
         # around with actually fulfilling said resource request....
 
+        # This translates the kwargs into a object which has nice fields
+        # that can be accessed and provides other useful methods on said
+        # fields...
         resource = self._create_resource(**kwargs)
-
-        # Generate a unique reservation_id for the create request
-        if resource.reservation_id is None:
-            resource.reservation_id = utils.generate_uid('r')
+        runners = []
 
         # Define the validation state chain and it's performers
         validate = o_utils.StateChain('validation')
         validate['policies'] = cs.ValidateResourcePolicies()
         validate['image'] = cs.ValidateResourceImage()
         validate['request'] = cs.ValidateResourceRequest()
-        validate.run(context, resource)
+        runners.append(validate)
 
         # From here on out we start collecting all rollbacks into a single
         # list of chains since we are now affecting external state and
         # all post-validation states must be given the chance to rollback
         db_entry = o_utils.StateChain('initial_db_entry')
         db_entry['compute_create'] = cs.CreateComputeEntry()
-        db_entry.run(context, resource)
+        runners.append(db_entry)
+        
+        # Now run this initial workflow
+        activator = TrackedWorkflow(self.db, context)
+        activator.run(runners, resource)
 
-        # Create a workflow request and set the current workflow id of the
-        # first performer 'ReserveInstances' of 'CreateServer' workflow type
-        workflow_request = self._create_db_entry_for_workflow_request(
-                                            context,
-                                            wf_states.PENDING,
-                                            1,  # Hardcoded 1 for Create Server
-                                            cs.ReserveInstances.WORKFLOW_ID)
-
-        resource.workflow_request_id = workflow_request.id
         self.orc_rpcapi.reserve_and_provision_resources(context,
-                                                   resource.to_dict())
+                                                        resource.to_dict())
+
         return (resource.instances, resource.reservation_id)
+
 
     def reserve_and_provision_resources(self, context, resource):
         # Ok we should now be at a level of request sanity where we can
         # actually start performing said fulfillment without knowing that it
         # will fail immediately. It could though still fail due to the async
         # nature that this software runs.
-
         resource = self._create_resource(**resource)
-        workflow_request = self.db.workflow_request_get(context.elevated(),
-                                                resource.workflow_request_id)
-
-        wf_type = self.db.workflow_type_get(context.elevated(),
-                                          workflow_request.workflow_type_id)
-
-        # Set the workflow status to ACTIVE
-        self.db.workflow_request_update(context.elevated(),
-                                        workflow_request['id'],
-                                        {'status': wf_states.ACTIVE})
+        make_state = importutils.import_object
+        make_state_args = {
+            'scheduler_rpcapi': self.scheduler_rpcapi,
+            'conductor_api': self.conductor_api,
+            'volume_api': self.volume_api,
+            'network_api': self.network_api,
+            'compute_rpcapi': self.compute_rpcapi,
+        }
 
         # Start filling in the parts of the final provision document
         # 'ask' and instead of forwarding it along. This is going to require
@@ -202,19 +269,17 @@ class OrchestrationManager(manager.Manager):
         # decisions instead of having to send 'hints' around that are
         # suboptimal and don't scale correctly...
         reserve = o_utils.StateChain('reservation')
-        reserve['instances'] = cs.ReserveInstances(
-                                    scheduler_rpcapi=self.scheduler_rpcapi,
-                                    conductor_api=self.conductor_api)
-        reserve['networks'] = cs.ReserveNetworks(
-                                    compute_rpcapi=self.compute_rpcapi,
-                                    network_api=self.network_api,
-                                    conductor_api=self.conductor_api)
-        reserve['volumes'] = cs.ReserveVolumes(
-                                    compute_rpcapi=self.compute_rpcapi,
-                                    volume_api=self.volume_api,
-                                    conductor_api=self.conductor_api)
-        reserve.run(context, resource, workflow_request=workflow_request,
-                    workflow_type=wf_type)
+        reserve_instances_driver = CONF.orchestration.reserve_instances_driver
+        reserve['instances'] = make_state(reserve_instances_driver,
+                                          **make_state_args)
+        reserve_networks_driver = CONF.orchestration.reserve_networks_driver
+        reserve['networks'] = make_state(reserve_networks_driver,
+                                         **make_state_args)
+        reserve_volumes_driver = CONF.orchestration.reserve_volumes_driver
+        reserve['volumes'] = make_state(reserve_volumes_driver,
+                                        **make_state_args)
+        activator = TrackedRunner(self.db, context)
+        activator.run([reserve], resource)
 
         provision_doc = compute_resource.MultiProvisionDocument()
         provision_doc.networks = reserve.results['networks']
@@ -239,48 +304,23 @@ class OrchestrationManager(manager.Manager):
         #     'ack' from each targeted hypervisor, and upon failure to receive
         #     said 'ack' decide it needs to decide how to best handle recovery
         #     of those instances.
-
         provision = o_utils.StateChain('provisioning', parents=[reserve])
-        provision['networks'] = cs.ProvisionNetworks()
-        provision['volumes'] = cs.ProvisionVolumes(volume_api=self.volume_api,
-                                            compute_rpcapi=self.compute_rpcapi,
-                                            conductor_api=self.conductor_api)
-        provision['instances'] = cs.ProvisionInstances(
-                                            compute_rpcapi=self.compute_rpcapi,
-                                            conductor_api=self.conductor_api)
+        provision_networks_driver = CONF.orchestration.provision_networks_driver
+        provision['networks'] = make_state(provision_networks_driver,
+                                           **make_state_args)
+        provision_volumes_driver = CONF.orchestration.provision_volumes_driver
+        provision['volumes'] = make_state(provision_volumes_driver,
+                                          **make_state_args)
+        provision_instances_driver = CONF.orchestration.provision_instances_driver
+        provision['instances'] = make_state(provision_instances_driver,
+                                            **make_state_args)
+        activator = TrackedRunner(self.db, context)
+        activator.run([reserve], resource, provision_doc)
 
-        provision.run(context, resource, provision_doc,
-                      workflow_request=workflow_request, workflow_type=wf_type)
-
-        instances_ack = {}
-        for instance in resource.instances:
-            instances_ack[instance['uuid']] = {'ack': 0,
-                                               'power_state': None,
-                                               'vm_state': None
-                                            }
-
-        self.mc.add(context.request_id, instances_ack)
-
-    @lockutils.synchronized(HYPERVISOR_ACK, 'orc-')
-    def hypervisor_ack(self, context, **kwargs):
-
-        instance_uuid = kwargs.get("instance_uuid")
-        ack = kwargs.get("ack")
-        power_state = kwargs.get("power_state")
-
-        instances_ack = self.mc.get(context.request_id)
-
-        instances_ack[instance_uuid]['ack'] = ack
-        instances_ack[instance_uuid]['power_state'] = power_state
-        request_complete = True
-
-        for key, instance_ack in instances_ack.items():
-            if instance_ack['ack'] == 0:
-                request_complete = False
-
-        self.mc.set(context.request_id, instances_ack)
-        if request_complete:
-            reconcile = o_utils.StateChain('reconciliation')
-            reconcile['compute_create'] = cs.ReconcileRequest(
-                                            conductor_api=self.conductor_api)
-            reconcile.run(context, memory_cache=self.mc)
+        # Now we need a state to wait for verifification that these instances
+        # came up, and if it fails, then we should undo all the other actions
+        # done.
+        validation = o_utils.StateChain('validation', parents=[provision])
+        validation['ensure_booted'] = cs.ValidateBooted(**make_state_args)
+        activator = TrackedRunner(self.db, context)
+        activator.run([validation], resource)

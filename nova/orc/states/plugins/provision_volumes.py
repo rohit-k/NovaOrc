@@ -20,20 +20,17 @@ from oslo.config import cfg
 
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.orc.states import plugins
+from nova.orc import states
+from nova.orc import orc_utils
 
 
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 
-class ProvisionVolumesDriver(plugins.ProvisioningDriver):
+class ProvisionVolumesDriver(states.ResourceUsingState):
     """Driver that implements volume provisioning"""
-
-    def __init__(self, **kwargs):
-        super(ProvisionVolumesDriver, self).__init__(**kwargs)
-
-    def provision(self, context, resource, provision_doc):
+    def apply(self, context, resource, provision_doc):
         volumes = provision_doc.volumes
         instance_volume_map = {}
         block_device_mapping = []
@@ -64,7 +61,4 @@ class ProvisionVolumesDriver(plugins.ProvisioningDriver):
                                                         block_device_mapping
                 instance_volume_map[instance['uuid']] = block_device_info
         provision_doc.volumes = instance_volume_map
-
-    def get(self, context, resource, provision_doc):
-        #should return same resource as that in reserve method
-        pass
+        return orc_utils.DictableObject()

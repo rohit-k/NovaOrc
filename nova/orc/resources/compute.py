@@ -16,6 +16,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from nova.orc import utils as orc_utils
+
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
@@ -37,8 +39,10 @@ class Display(dict):
         self.description = description
 
 
-class Create(object):
+class Create(orc_utils.DictableObject):
     def __init__(self, **kwargs):
+        # Attributes which we expect to always be there from the initia;
+        # create request...
         self.instance_type = kwargs.get('instance_type')
         self.image_href = kwargs.get('image_uuid')
         self.kernel_id = kwargs.get('kernel_id')
@@ -68,59 +72,6 @@ class Create(object):
         self.block_device_mapping = kwargs.get('block_device_mapping')
         self.auto_disk_config = kwargs.get('auto_disk_config')
         self.scheduler_hints = kwargs.get('scheduler_hints')
-
-        # additional attributes needed by a resource
-        self.reservation_id = kwargs.get('reservation_id', None)
-        self.image = kwargs.get('image', None)
-        self.num_instances = kwargs.get('num_instances', None)
-        self.quota_reservations = kwargs.get('quota_reservations', None)
-        self.config_drive_id = kwargs.get('config_drive_id', None)
-        self.root_device_name = kwargs.get('root_device_name', None)
-        self.forced_host = kwargs.get('forced_host', None)
-        self.instances = kwargs.get('instances', [])
-        self.workflow_request_id = kwargs.get('workflow_request_id')
-        self.request_spec = kwargs.get('request_spec', None)
-        self.filter_properties = kwargs.get('filter_properties', None)
-
-    def to_dict(self):
-        return {
-            "instance_type": self.instance_type,
-            "image_href": self.image_href,
-            "kernel_id": self.kernel_id,
-            "ramdisk_id": self.ramdisk_id,
-            "min_count": self.min_count,
-            "max_count": self.max_count,
-            "display": self.display,
-            "key_name": self.key_name,
-            "key_data": self.key_data,
-            "key_pair": self.key_pair,
-            "security_group": self.security_group,
-            "availability_zone": self.availability_zone,
-            "user_data": self.user_data,
-            "metadata": self.metadata,
-            "injected_files": self.injected_files,
-            "admin_password": self.admin_password,
-            "access_ip_v4": self.access_ip_v4,
-            "access_ip_v6": self.access_ip_v6,
-            "requested_networks": self.requested_networks,
-            "config_drive": self.config_drive,
-            "block_device_mapping": self.block_device_mapping,
-            "auto_disk_config": self.auto_disk_config,
-            "scheduler_hints": self.scheduler_hints,
-
-            # additional attributes needed by a resource
-            "reservation_id": self.reservation_id,
-            "image": self.image,
-            "num_instances": self.num_instances,
-            "quota_reservations": self.quota_reservations,
-            "config_drive_id": self.config_drive_id,
-            "root_device_name": self.root_device_name,
-            "forced_host": self.forced_host,
-            "instances": self.instances,
-            "workflow_request_id": self.workflow_request_id,
-            "request_spec": self.request_spec,
-            "filter_properties": self.filter_properties
-        }
 
 
 class Instance(object):

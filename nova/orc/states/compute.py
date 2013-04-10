@@ -36,11 +36,9 @@ from nova import network
 from nova.network.security_group import openstack_driver
 from nova import notifications
 from nova.openstack.common import excutils
-from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.orc import states
-from nova.orc.states import workflow_states as wf_states
 from nova.orc import utils as orc_utils
 import nova.policy
 from nova import quota
@@ -48,41 +46,6 @@ from nova import utils
 
 
 LOG = logging.getLogger(__name__)
-
-reservation_driver_opts = [
-    cfg.StrOpt('reserve_instances_driver',
-               default='nova.orc.states.plugins.reserve_instances.'
-               'ReserveInstancesDriver',
-               help='Default driver for reserving instances'),
-    cfg.StrOpt('reserve_networks_driver',
-               default='nova.orc.states.plugins.reserve_networks.'
-               'ReserveNetworksDriver',
-               help='Default driver for reserving networks'),
-    cfg.StrOpt('reserve_volumes_driver',
-               default='nova.orc.states.plugins.reserve_volumes.'
-               'ReserveVolumesDriver',
-               help='Default driver for reserving volumes')
-    ]
-
-provisioning_driver_opts = [
-    cfg.StrOpt('provision_instances_driver',
-        default='nova.orc.states.plugins.provision_instances.'
-                'ProvisionInstancesDriver',
-        help='Default driver for provisioning instances'),
-    cfg.StrOpt('provision_networks_driver',
-        default='nova.orc.states.plugins.provision_networks.'
-                'ProvisionNetworksDriver',
-        help='Default driver for provisioning networks'),
-    cfg.StrOpt('provision_volumes_driver',
-        default='nova.orc.states.plugins.provision_volumes.'
-                'ProvisionVolumesDriver',
-        help='Default driver for provisioning volumes')
-]
-
-
-CONF = cfg.CONF
-CONF.register_opts(reservation_driver_opts, group='orchestration')
-CONF.register_opts(provisioning_driver_opts, group='orchestration')
 
 CONF = cfg.CONF
 CONF.import_opt('allow_resize_to_same_host', 'nova.compute.api')
@@ -93,49 +56,52 @@ MAX_USERDATA_SIZE = 65535
 QUOTAS = quota.QUOTAS
 
 
-def check_policy(context, action, target, scope='compute'):
-        _action = '%s:%s' % (scope, action)
-        nova.policy.enforce(context, _action, target)
+def _check_policy(context, action, target, scope='compute'):
+    _action = '%s:%s' % (scope, action)
+    nova.policy.enforce(context, _action, target)
 
 
+# This chain is responsible for validating that a desired resource
+# validates against a given policy for that resource under the
+# given context so that before we start acting on the desired resources
+# we have at least ensured that the resource 'ask' passes some level of
+# sanity.
 class ValidateResourcePolicies(states.ResourceUsingState):
 
     def apply(self, context, resource):
         self._check_create_policies(context, resource.availability_zone,
                                     resource.requested_networks,
                                     resource.block_device_mapping)
-
-        result = {'validate_policies': states.POLICIES_VALIDATED}
-        return result
+        return orc_utils.DictableObject(name='validate_policies',
+                                        state=states.POLICIES_VALIDATED,
+                                        resource=resource)
 
     def _check_create_policies(self, context, availability_zone,
                                requested_networks, block_device_mapping):
         """Check policies for create()."""
-        target = {'project_id': context.project_id,
-                  'user_id': context.user_id,
-                  'availability_zone': availability_zone}
-        check_policy(context, 'create', target)
+        target = {
+            'project_id': context.project_id,
+            'user_id': context.user_id,
+            'availability_zone': availability_zone
+        }
+        _check_policy(context, 'create', target)
 
         if requested_networks:
-            check_policy(context, 'create:attach_network', target)
+            _check_policy(context, 'create:attach_network', target)
 
         if block_device_mapping:
-            check_policy(context, 'create:attach_volume', target)
-
-    def revert(self, context, chain, excp, cause):
-        """Nothing to do"""
-        pass
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
+            _check_policy(context, 'create:attach_volume', target)
 
 
+# This validation state checks the image resource is correct and is
+# accessible by the context asking for said image resource.
 class ValidateResourceImage(states.ResourceUsingState):
 
     @staticmethod
     def _handle_kernel_and_ramdisk(context, kernel_id, ramdisk_id,
                                    image):
         """Choose kernel and ramdisk appropriate for the instance.
+
         The kernel and ramdisk can be chosen in one of three ways:
             1. Passed in with create-instance request.
             2. Inherited from image.
@@ -192,15 +158,9 @@ class ValidateResourceImage(states.ResourceUsingState):
                                                            resource.ramdisk_id,
                                                            resource.image)
 
-        result = {'validate_image': states.IMAGE_VALIDATED}
-        return result
-
-    def revert(self, context, chain, excp, cause):
-        """Nothing to do"""
-        pass
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
+        return orc_utils.DictableObject(name='validate_image',
+                                        state=states.IMAGE_VALIDATED,
+                                        resource=resource)
 
 
 class ValidateResourceRequest(states.ResourceUsingState):
@@ -217,7 +177,7 @@ class ValidateResourceRequest(states.ResourceUsingState):
         # Check the quota
         try:
             reservations = QUOTAS.reserve(context, instances=max_count,
-                cores=req_cores, ram=req_ram)
+                                          cores=req_cores, ram=req_ram)
         except exception.OverQuota as exc:
             # OK, we exceeded quota; let's figure out why...
             quotas = exc.kwargs['quotas']
@@ -229,6 +189,7 @@ class ValidateResourceRequest(states.ResourceUsingState):
                 for res in quotas.keys())
 
             allowed = headroom['instances']
+
             # Reduce 'allowed' instances in line with the cores & ram headroom
             if instance_type['vcpus']:
                 allowed = min(allowed,
@@ -321,7 +282,7 @@ class ValidateResourceRequest(states.ResourceUsingState):
 
         try:
             QUOTAS.limit_check(context, injected_file_path_bytes=max_path,
-                injected_file_content_bytes=max_content)
+                               injected_file_content_bytes=max_content)
         except exception.OverQuota as exc:
             # Favor path limit over content limit for reporting
             # purposes
@@ -426,15 +387,14 @@ class ValidateResourceRequest(states.ResourceUsingState):
         resource.system_metadata = instance_types.save_instance_type_info(
                                 dict(), resource.instance_type)
 
-        result = {'validate_request': states.REQUEST_VALIDATED}
-        return result
+        return orc_utils.DictableObject(name='validate_request',
+                                        state=states.REQUEST_VALIDATED,
+                                        resource=resource)
 
-    def revert(self, context, chain, excp, cause):
-        if self.resource.quota_reservations:
-            QUOTAS.rollback(context, self.resource.quota_reservations)
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
+    def revert(self, context, result, chain, excp, cause):
+        # Ensure that if we made a reservation that we now undo it.
+        if result.resource.quota_reservations:
+            QUOTAS.rollback(context, result.resource.quota_reservations)
 
 
 class CreateComputeEntry(states.ResourceUsingState):
@@ -621,7 +581,7 @@ class CreateComputeEntry(states.ResourceUsingState):
         self.security_group_api = \
                     openstack_driver.get_openstack_security_group_driver()
 
-        self.instance_uuids = []
+        resource.instance_uuids = []
         base_options = {
             'reservation_id': resource.reservation_id,
             'image_ref': resource.image_href,
@@ -679,7 +639,7 @@ class CreateComputeEntry(states.ResourceUsingState):
                                              resource.block_device_mapping,
                                              resource.num_instances, i)
             resource.instances.append(jsonutils.to_primitive(instance))
-            self.instance_uuids.append(instance['uuid'])
+            resource.instance_uuids.append(instance['uuid'])
 
             # send a state update notification for the initial create to
             # show it going from non-existent to BUILDING
@@ -704,214 +664,39 @@ class CreateComputeEntry(states.ResourceUsingState):
             self._record_action_start(context, instance,
                 instance_actions.CREATE)
 
-        result = {'create_db_entry': states.CREATED_DB_ENTRY}
-        return result
+        return orc_utils.DictableObject(name='create_db_entry',
+                                        state=states.CREATED_DB_ENTRY,
+                                        resource=resource)
 
-    def revert(self, context, chain, excp, cause):
-    # In the case of any exceptions, attempt DB cleanup and rollback the
-    # quota reservations.
+    def revert(self, context, result, chain, excp, cause):
+        # In the case of any exceptions, attempt DB cleanup and rollback the
+        # quota reservations.
         with excutils.save_and_reraise_exception():
             try:
-                for instance_uuid in self.instance_uuids:
+                for instance_uuid in result.resource.instance_uuids:
                     self.db.instance_destroy(context, instance_uuid)
             finally:
-                if self.resource.quota_reservations:
-                    QUOTAS.rollback(context, self.resource.quota_reservations)
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
+                if result.resource.quota_reservations:
+                    QUOTAS.rollback(context,
+                                    result.resource.quota_reservations)
 
 
-class ReserveInstances(states.ResourceUsingState):
+class ValidateBooted(states.ResourceUsingState):
 
-    WORKFLOW_ID = 1
-
-    def __init__(self, **kwargs):
-        super(ReserveInstances, self).__init__(**kwargs)
-        reserve_instances_driver = CONF.orchestration.reserve_instances_driver
-        self.driver = importutils.import_object(reserve_instances_driver,
-                                                **kwargs)
-
-    @orc_utils.execute_workflow
-    def apply(self, context, resource, **kwargs):
-        workflow_request = kwargs.get("workflow_request")
-        if (workflow_request['current_workflow_id'] == self.WORKFLOW_ID):
-            return self.driver.reserve(context, resource)
-        else:
-            return self.driver.get(context, resource)
-
-    def revert(self, context, chain, excp, cause):
-        """Call driver.unreserve"""
-        (name, performer, (args, kwargs)) = cause
-        resource = args[0]
-        LOG.debug("ReserveInstances:revert %s", cause)
-        return self.driver.unreserve(context, resource)
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
-
-
-class ReserveNetworks(states.ResourceUsingState):
-
-    WORKFLOW_ID = 2
-
-    def __init__(self, **kwargs):
-        super(ReserveNetworks, self).__init__(**kwargs)
-        reserve_networks_driver = CONF.orchestration.reserve_networks_driver
-        self.driver = importutils.import_object(reserve_networks_driver,
-                                                **kwargs)
-
-    @orc_utils.execute_workflow
-    def apply(self, context, resource, **kwargs):
-        workflow_request = kwargs.get("workflow_request")
-        if (workflow_request['current_workflow_id'] == self.WORKFLOW_ID):
-            return self.driver.reserve(context, resource)
-        else:
-            return self.driver.get(context, resource)
-
-    def revert(self, context, chain, excp, cause):
-        (name, performer, (args, kwargs)) = cause
-        resource = args[0]
-        LOG.debug("ReserveNetworks:revert %s", cause)
-        return self.driver.unreserve(context, resource)
-
-    def notify(self, change, chain, *args, **kwargs):
-        pass
-
-
-class ReserveVolumes(states.ResourceUsingState):
-
-    WORKFLOW_ID = 3
-    WORKFLOW_TYPE_ID = 1
-
-    def __init__(self, **kwargs):
-        super(ReserveVolumes, self).__init__(**kwargs)
-        reserve_volumes_driver = CONF.orchestration.reserve_volumes_driver
-        self.driver = importutils.import_object(reserve_volumes_driver,
-                                                **kwargs)
-
-    @orc_utils.execute_workflow
-    def apply(self, context, resource, **kwargs):
-        workflow_request = kwargs.get("workflow_request")
-        if (workflow_request['current_workflow_id'] == self.WORKFLOW_ID):
-            return self.driver.reserve(context, resource)
-        else:
-            return self.driver.get(context, resource)
-
-    def revert(self, context, chain, excp, cause):
-        (name, performer, (args, kwargs)) = cause
-        resource = args[0]
-        LOG.debug("ReserveVolumes:revert %s", cause)
-        return self.driver.unreserve(context, resource)
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
-
-
-class ProvisionNetworks(states.ResourceUsingState):
-
-    WORKFLOW_ID = 4
-
-    def __init__(self, **kwargs):
-        super(ProvisionNetworks, self).__init__(**kwargs)
-        provision_networks_driver = \
-                            CONF.orchestration.provision_networks_driver
-        self.driver = importutils.import_object(provision_networks_driver,
-                                                **kwargs)
-
-    @orc_utils.execute_workflow
     def apply(self, context, *args, **kwargs):
+        # TODO: Wait a given amount of time, periodically checking the database
+        # to see if the instance has came online, if after X amount of time
+        # it has not came online then ack the hypervisor directly to check
+        # if its online, if that doesn't work, bail out by performing different
+        # types of reconciliation in the revert method here...
         pass
-
-    def revert(self, context, chain, excp, cause):
-        pass
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
-
-
-class ProvisionVolumes(states.ResourceUsingState):
-
-    WORKFLOW_ID = 5
-
-    def __init__(self, **kwargs):
-        super(ProvisionVolumes, self).__init__(**kwargs)
-        provision_volumes_driver = CONF.orchestration.provision_volumes_driver
-        self.driver = importutils.import_object(provision_volumes_driver,
-                                                **kwargs)
-
-    @orc_utils.execute_workflow
-    def apply(self, context, resource, provision_doc, **kwargs):
-        workflow_request = kwargs.get("workflow_request")
-        if (workflow_request['current_workflow_id'] == self.WORKFLOW_ID):
-            return self.driver.provision(context, resource, provision_doc)
-        else:
-            return self.driver.get(context, resource, provision_doc)
-
-    def revert(self, context, chain, excp, cause):
-        pass
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
-
-
-class ProvisionInstances(states.ResourceUsingState):
-
-    WORKFLOW_ID = 6
-
-    def __init__(self, **kwargs):
-        super(ProvisionInstances, self).__init__(**kwargs)
-        provision_instances_driver = \
-                             CONF.orchestration.provision_instances_driver
-        self.driver = importutils.import_object(provision_instances_driver,
-                                                **kwargs)
-
-    @orc_utils.execute_workflow
-    def apply(self, context, resource, provision_doc, **kwargs):
-
-        self.driver.provision(context, resource, provision_doc)
-        return 'SUCCESS'
-
-    def revert(self, context, chain, excp, cause):
-        pass
-
-    def notify(self, change, chain, notified_by, *args, **kwargs):
-        pass
-
-
-class ReconcileRequest(states.ResourceUsingState):
-
-    WORKFLOW_ID = 7
-
-    def __init__(self, **kwargs):
-        super(ReconcileRequest, self).__init__(**kwargs)
-
-    def apply(self, context, **kwargs):
-
-        mc = kwargs.get("memory_cache")
-
-        instances_ack = mc.get(context.request_id)
-
-        # Update each instance's state to ACTIVE
-        for instance_uuid, state in instances_ack.items():
-            current_power_state = state['power_state']
-            update_data = dict(power_state=current_power_state,
-                vm_state=vm_states.ACTIVE,
-                task_state=None)
-
-            self.conductor_api.instance_update(context,
-                                instance_uuid, **update_data)
-
-        #Set the status of the workflow request to Complete
-        workflow_request = self.db.workflow_request_get_by_request_id(
-                                                context.elevated(),
-                                                context.request_id)
-
-        self.db.workflow_request_update(context.elevated(),
-                                        workflow_request['id'],
-                                        {'status': wf_states.COMPLETE})
-        #delete the request from the mc
-        mc.delete(context.request_id)
 
     def revert(self, context, *args, **kwargs):
+        # TODO: perform different types of reconciliation here, possibly a 
+        # dynamic driver can be loaded that will be given an instance and where
+        # it was supposed to be and ask said driver to resolve what to do, the
+        # driver could return codes like PASS, REVERT_ALL, and so on, where PASS
+        # would mean to just leave it alone (likely in error state) and REVERT_ALL
+        # would mean to start reverting all changes made (including all instances
+        # which did boot correctly...)
         pass

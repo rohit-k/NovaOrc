@@ -21,7 +21,8 @@ from oslo.config import cfg
 from nova import exception
 from nova.compute import vm_states
 from nova.openstack.common import log as logging
-from nova.orc.states import plugins
+from nova.orc import states
+from nova.orc import utils as orc_utils
 
 retry_opts = [
     cfg.IntOpt('reserve_retry_count',
@@ -36,13 +37,9 @@ CONF.register_opts(retry_opts, group='orchestration')
 LOG = logging.getLogger(__name__)
 
 
-class ReserveInstancesDriver(plugins.ReservationDriver):
+class ReserveInstancesDriver(states.ResourceUsingState):
     """Driver that implements instance reservation with a number of retries"""
-
-    def __init__(self, **kwargs):
-        super(ReserveInstancesDriver, self).__init__(**kwargs)
-
-    def reserve(self, context, resource):
+    def apply(self, context, resource, *args, **kwargs):
         desired_instances = resource.max_count
         inst_host_map = {}
         for attempt in range(0, CONF.orchestration.reserve_retry_count):
@@ -60,7 +57,14 @@ class ReserveInstancesDriver(plugins.ReservationDriver):
             else:
                 raise exception.ReserveInstancesError()
 
-        return inst_host_map
+    return orc_utils.DictableObject(resource=resource,
+                                    instance_host_map=inst_host_map)
+
+    def _instance_update(self, context, instance_uuid, **kwargs):
+        """Update an instance in the database using kwargs as value."""
+
+        return self.conductor_api.instance_update(context,
+                                                  instance_uuid, **kwargs)
 
     def populate_instance_host(self, resource, inst_host_map):
         # All well, populate the host parameter for the instances
@@ -68,15 +72,9 @@ class ReserveInstancesDriver(plugins.ReservationDriver):
             if instance['uuid'] in inst_host_map:
                 instance['host'] = inst_host_map[instance['uuid']]['host']
 
-    def unreserve(self, context, resource):
-
+    def revert(self, context, result, *args, **kwargs):
         #set the status of the instances to ERROR
-        for instance in resource.instances:
-            instance = super(ReserveInstancesDriver,
-                            self)._instance_update(context, instance['uuid'],
-                            vm_state=vm_states.ERROR)
+        for instance in result.resource.instances:
+            instance = self._instance_update(context, instance['uuid'],
+                                             vm_state=vm_states.ERROR)
             LOG.debug("Set state of instance %s to ERROR", instance['uuid'])
-
-    def get(self, context, *args, **kwargs):
-        #should return same resource as that in reserve method
-        pass

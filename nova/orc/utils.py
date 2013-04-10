@@ -17,6 +17,7 @@
 #    under the License.
 
 
+import copy
 import functools
 try:
     from collections import OrderedDict
@@ -34,25 +35,23 @@ from nova.orc.states import workflow_states
 LOG = logging.getLogger(__name__)
 
 
-def execute_workflow(function):
-    """Decorator that executes a workflow"""
-    @functools.wraps(function)
-    def decorated_function(self, context, *args, **kwargs):
-        workflow_request = kwargs.get("workflow_request")
-        wf_type = kwargs.get("workflow_type")
-        output = function(self, context, *args, **kwargs)
-        #set the current workflow to the next workflow id
-        if (workflow_request['current_workflow_id'] == self.WORKFLOW_ID):
-            for workflow in wf_type['workflows']:
-                if self.WORKFLOW_ID == workflow['id']:
-                    next_workflow_id = workflow['next_workflow_id']
-                    self.db.workflow_request_update(context.elevated(),
-                                                    workflow_request['id'],
-                                 {'current_workflow_id': next_workflow_id})
-                    workflow_request['current_workflow_id'] = next_workflow_id
+class DictableObject(object):
+    def __init__(self, **kwargs):
+        if kwargs:
+            for (k, v) in kwargs.items():
+                setattr(self, k, v)
 
-        return output
-    return decorated_function
+    def to_dict(self):
+        myself = {}
+        for (k, v) in self.__dict__.items():
+            if k.startswith("_"):
+                continue
+            myself[k] = v
+        return myself
+
+    def __getattr__(self, name):
+        # Be tolerant of fields not existing...
+        return None
 
 
 class StateChain(object):
@@ -63,6 +62,8 @@ class StateChain(object):
         self.states = OrderedDict()
         self.results = OrderedDict()
         self.parents = parents
+        self.result_fetcher = lambda c, n, s: None
+        self.listeners = []
 
     def __setitem__(self, name, performer):
         self.states[name] = performer
@@ -74,34 +75,44 @@ class StateChain(object):
         for (name, performer) in self.states.items():
             try:
                 self._on_state_start(context, performer, name)
-                result = performer.apply(context, *args, **kwargs)
-                self.results[name] = result
+                # See if we have already ran this...
+                result = self.result_fetcher(context, name, self)
+                if result is None:
+                    result = performer.apply(context, *args, **kwargs)
+                # Keep a pristine copy of the result in the results table
+                # so that if said result is altered by other further states
+                # the one here will not be.
+                self.results[name] = copy.deepcopy(result)
                 self._on_state_finish(context, performer, name, result)
             except Exception as ex:
                 with excutils.save_and_reraise_exception():
                     cause = (name, performer, (args, kwargs))
                     self.rollback(context, name, self, ex, cause)
-
         return self
 
     def _on_state_start(self, context, performer, name):
         performer.notify(context, workflow_states.STARTING, name, self)
+        for i in self.listeners:
+            i.notify(context, workflow_states.STARTING, name, self)
 
     def _on_state_finish(self, context, performer, name, result):
         # If a future state fails we need to ensure that we
         # revert the one we just finished.
-        LOG.debug("Result of %s:%s chain: %s " % (self.name, name,
-                                                  result))
-        self.reversions.append(performer)
+        LOG.debug("Result of %s:%s chain: %s", self.name, name, result)
+        # affecting said result later down the line...
+        self.reversions.append((name, performer))
         performer.notify(context, workflow_states.COMPLETE, name, self,
                          result=result)
+        for i in self.listeners:
+            i.notify(context, workflow_states.COMPLETE, name,
+                     self, result=result)
 
     def rollback(self, context, name, chain=None, ex=None, cause=None):
         if chain is None:
             chain = self
-        for (i, performer) in enumerate(reversed(self.reversions)):
+        for (i, (name, performer)) in enumerate(reversed(self.reversions)):
             try:
-                performer.revert(context, chain, ex, cause)
+                performer.revert(context, self.results[name], chain, ex, cause)
             except excp.NovaException:
                 # Ex: WARN: Failed rolling back stage 1 (validate_request) of
                 #           chain validation due to nova exception
@@ -111,8 +122,8 @@ class StateChain(object):
                         " of chain %s due to nova exception.")
                 LOG.warn(msg, (i + 1), performer.name, self.name)
                 if not self.tolerant:
-                    # Log a msg AND re-raise the Nova exception if the Chain
-                    # does not tolerate exceptions
+                    # This will log a msg AND re-raise the Nova exception if
+                    # the chain does not tolerate exceptions
                     raise
             except Exception:
                 # Ex: WARN: Failed rolling back stage 1 (validate_request) of

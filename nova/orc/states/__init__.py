@@ -26,6 +26,9 @@ from nova.scheduler import rpcapi as scheduler_rpcapi
 
 # Useful to know when other states
 # are being activated and finishing...
+#
+# TODO(harlowja): likely these should be
+# properties of the state (at least the non-basic ones)
 STARTING = 0
 COMPLETED = 2
 POLICIES_VALIDATED = 3
@@ -48,9 +51,8 @@ class State(base.Base):
     def apply(self, context, *args, **kwargs):
         raise NotImplementedError()
 
-    @abc.abstractmethod
-    def revert(self, context, chain, excp, cause):
-        raise NotImplementedError()
+    def revert(self, context, result, chain, excp, cause):
+        pass
 
     # Used to notify state when another the overall progress
     # of another state (or this state) changes

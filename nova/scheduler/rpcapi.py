@@ -74,6 +74,17 @@ class SchedulerAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         super(SchedulerAPI, self).__init__(topic=CONF.scheduler_topic,
                 default_version=self.BASE_RPC_API_VERSION)
 
+    def reserve_instance(self, ctxt, request_spec, admin_password,
+            injected_files, requested_networks, is_first_time,
+            filter_properties):
+
+        return self.call(ctxt, self.make_msg('reserve_instance',
+                request_spec=request_spec, admin_password=admin_password,
+                injected_files=injected_files,
+                requested_networks=requested_networks,
+                is_first_time=is_first_time,
+                filter_properties=filter_properties))
+
     def run_instance(self, ctxt, request_spec, admin_password,
             injected_files, requested_networks, is_first_time,
             filter_properties):

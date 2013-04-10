@@ -67,6 +67,7 @@ setuptools.setup(
                'bin/nova-network',
                'bin/nova-novncproxy',
                'bin/nova-objectstore',
+               'bin/nova-orc',
                'bin/nova-rootwrap',
                'bin/nova-scheduler',
                'bin/nova-spicehtml5proxy',

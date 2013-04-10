@@ -44,7 +44,9 @@ def HostAPI(*args, **kwargs):
     api
     """
     importutils = nova.openstack.common.importutils
-    compute_api_class_name = oslo.config.cfg.CONF.compute_api_class
+    # compute_api_class_name = oslo.config.cfg.CONF.compute_api_class
+    # Temporary hard-code compute_api_class to the original compute api class
+    compute_api_class_name = nova.compute.api.API
     compute_api_class = importutils.import_class(compute_api_class_name)
     class_name = compute_api_class.__module__ + ".HostAPI"
     return importutils.import_object(class_name, *args, **kwargs)

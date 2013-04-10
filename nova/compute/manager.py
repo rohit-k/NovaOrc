@@ -68,6 +68,7 @@ from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import rpc
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
+from nova.orc import rpcapi as orc_rpcapi
 from nova import paths
 from nova import safe_utils
 from nova import utils
@@ -343,6 +344,7 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.consoleauth_rpcapi = consoleauth.rpcapi.ConsoleAuthAPI()
         self.cells_rpcapi = cells_rpcapi.CellsAPI()
         self._resource_tracker_dict = {}
+        self.orc_rpcapi = orc_rpcapi.OrchestrationAPI()
 
         super(ComputeManager, self).__init__(service_name="compute",
                                              *args, **kwargs)
@@ -878,6 +880,129 @@ class ComputeManager(manager.SchedulerDependentManager):
             with excutils.save_and_reraise_exception():
                 self._set_instance_error_state(context, instance['uuid'])
 
+    def _orc_run_instance(self, context, request_spec,
+                      filter_properties, network_info, block_device_info,
+                      injected_files, admin_password, is_first_time, node,
+                      instance):
+        """Launch a new instance with specified options."""
+        context = context.elevated()
+        try:
+            self._check_instance_exists(context, instance)
+
+            try:
+                pass
+
+                # TODO(rohit): Skip this for now.
+                #
+                # TODO(harlowja): this should be moved to the orcestrator since
+                # it can at any point decide to stop building (or rollback),
+                # which would then invalidate this message.
+
+                # self._start_building(context, instance)
+            except exception.InstanceNotFound:
+                LOG.info(_("Instance disappeared before we could start it"),
+                         instance=instance)
+                # Quickly bail out of here
+                return
+
+            image_meta = self._check_image_size(context, instance)
+
+            if node is None:
+                node = self.driver.get_available_nodes()[0]
+                LOG.debug(_("No node specified, defaulting to %(node)s") %
+                          locals())
+
+            if image_meta:
+                extra_usage_info = {"image_name": image_meta['name']}
+            else:
+                extra_usage_info = {}
+
+            # TODO(harlowja): likely the orchestration unit should be the one
+            # responsible for sending these notifications and not the compute
+            # node itself (since the orchestration unit knows the states and
+            # has the 'global' view of what is occuring). This is especially
+            # important to do since the orcestration unit could at any point
+            # decide to rollback said creation, thus invalidating this and
+            # further notifications.
+            self._notify_about_instance_usage(
+                    context, instance, "create.start",
+                    extra_usage_info=extra_usage_info)
+
+            rt = self._get_resource_tracker(node)
+
+            # TODO(rohit): Get the network_info from db for now
+            #
+            # TODO(harlowja): pass this in instead since the orchestration
+            # unit has already 'reserved' the network for this instance...
+
+            network_info = self._get_instance_nw_info(context, instance)
+            try:
+         reserve_retry.py       ack = 0
+                limits = filter_properties.get('limits', {})
+                with rt.instance_claim(context, instance, limits):
+
+                    set_access_ip = (is_first_time and
+                                     not instance['access_ip_v4'] and
+                                     not instance['access_ip_v6'])
+
+                    current_power_state = self._orc_spawn(context, instance,
+                                image_meta, network_info, block_device_info,
+                                injected_files, admin_password,
+                                set_access_ip=set_access_ip)
+                    if current_power_state == power_state.RUNNING:
+                        ack = 1
+
+                    self.orc_rpcapi.hypervisor_ack(context,
+                                instance_uuid=instance['uuid'],
+                                power_state=current_power_state,
+                                ack=ack)
+
+            except exception.InstanceNotFound:
+                # TODO(harlowja): likely the orchestration unit should handle
+                # the case where spawn failure, so that it can rollback network
+                # allocations and volume allocations and similar items. In the
+                # end its the only one that has knowledge of which resources
+                # are being provided to this vm.
+                #
+                # Note: that we need to have good knowledge of what the error was
+                # and communicate it back to the orchestrator so that the orchestrator
+                # can handle rollback which can be error dependent...
+                with excutils.save_and_reraise_exception():
+                    try:
+                        self._deallocate_network(context, instance)
+                    except Exception:
+                        msg = _('Failed to dealloc network '
+                                'for deleted instance')
+                        LOG.exception(msg, instance=instance)
+            except exception.UnexpectedTaskStateError as e:
+                actual_task_state = e.kwargs.get('actual', None)
+                if actual_task_state == 'deleting':
+                    msg = _('Instance was deleted during spawn.')
+                    LOG.debug(msg, instance=instance)
+                else:
+                    raise
+            except Exception:
+                pass
+                # TODO(harlowja): this rescheduling must not be here, the local
+                # compute node does not have enough information to correctly
+                # reschedule this instance.
+
+                #exc_info = sys.exc_info()
+                # try to re-schedule instance:
+                #self._reschedule_or_reraise(context, instance, exc_info,
+                #        requested_networks, admin_password, injected_files,
+                #        is_first_time, request_spec, filter_properties, bdms)
+            else:
+                # Spawn success:
+                self._notify_about_instance_usage(context, instance,
+                        "create.end", network_info=network_info,
+                        extra_usage_info=extra_usage_info)
+        except Exception:
+            # TODO(harlowja): should the orchestration unit should be marking this as
+            # having errored and figuring what correct action to take??
+            with excutils.save_and_reraise_exception():
+                self._set_instance_error_state(context, instance['uuid'])
+
     def _log_original_error(self, exc_info, instance_uuid):
         type_, value, tb = exc_info
         LOG.error(_('Error: %s') %
@@ -1142,6 +1267,49 @@ class ComputeManager(manager.SchedulerDependentManager):
         return self._instance_update(context, instance['uuid'],
                                      **update_data)
 
+    def _orc_spawn(self, context, instance, image_meta, network_info,
+               block_device_info, injected_files, admin_password,
+               set_access_ip=False):
+        """Spawn an instance with error logging and update its power state."""
+        try:
+            self.driver.spawn(context, instance, image_meta,
+                              injected_files, admin_password,
+                              self._legacy_nw_info(network_info),
+                              block_device_info)
+
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                LOG.exception(_('Instance failed to spawn'), instance=instance)
+
+        current_power_state = self._get_power_state(context, instance)
+
+        def _set_access_ip_values():
+            """Add access ip values for a given instance.
+
+            If CONF.default_access_ip_network_name is set, this method will
+            grab the corresponding network and set the access ip values
+            accordingly. Note that when there are multiple ips to choose
+            from, an arbitrary one will be chosen.
+            """
+
+            network_name = CONF.default_access_ip_network_name
+            if not network_name:
+                return
+
+            for vif in network_info:
+                if vif['network']['label'] == network_name:
+                    for ip in vif.fixed_ips():
+                        if ip['version'] == 4:
+                            update_data['access_ip_v4'] = ip['address']
+                        if ip['version'] == 6:
+                            update_data['access_ip_v6'] = ip['address']
+                    return
+
+        if set_access_ip:
+            _set_access_ip_values()
+
+        return current_power_state
+
     def _notify_about_instance_usage(self, context, instance, event_suffix,
                                      network_info=None, system_metadata=None,
                                      extra_usage_info=None):
@@ -1221,6 +1389,31 @@ class ComputeManager(manager.SchedulerDependentManager):
             self._run_instance(context, request_spec,
                     filter_properties, requested_networks, injected_files,
                     admin_password, is_first_time, node, instance)
+        do_run_instance()
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @reverts_task_state
+    @wrap_instance_event
+    @wrap_instance_fault
+    def orc_run_instance(self, context, instance, request_spec=None,
+                         filter_properties=None, network_info=None,
+                         block_device_info=None, injected_files=None,
+                         admin_password=None, is_first_time=False, node=None):
+
+        if filter_properties is None:
+            filter_properties = {}
+        if injected_files is None:
+            injected_files = []
+        else:
+            injected_files = [(path, base64.b64decode(contents))
+                              for path, contents in injected_files]
+
+        @lockutils.synchronized(instance['uuid'], 'nova-')
+        def do_run_instance():
+            self._orc_run_instance(context, request_spec,
+                    filter_properties, network_info, block_device_info,
+                    injected_files, admin_password, is_first_time, node,
+                    instance)
         do_run_instance()
 
     def _shutdown_instance(self, context, instance, bdms):
@@ -4032,3 +4225,11 @@ class ComputeManager(manager.SchedulerDependentManager):
                 filtered_instances.append(instance)
 
         self.driver.manage_image_cache(context, filtered_instances)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    def macs_for_instance(self, context, instance):
+        return self.driver.macs_for_instance(instance)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    def get_volume_connector(self, context, instance):
+        return self.driver.get_volume_connector(instance)

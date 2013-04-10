@@ -155,6 +155,15 @@ class Scheduler(object):
         msg = _("Driver must implement schedule_prep_resize")
         raise NotImplementedError(msg)
 
+    def schedule_reserve_instance(self, context, request_spec,
+                                  admin_password, injected_files,
+                                  requested_networks, is_first_time,
+                                  filter_properties):
+        """Must override schedule_reserve_instance method for scheduler
+        to work."""
+        msg = _("Driver must implement schedule_reserve_instance")
+        raise NotImplementedError(msg)
+
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,

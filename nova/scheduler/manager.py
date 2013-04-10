@@ -116,6 +116,33 @@ class SchedulerManager(manager.Manager):
                                              {'vm_state': vm_states.ERROR},
                                              context, ex, {})
 
+    def reserve_instance(self, context, request_spec, admin_password,
+            injected_files, requested_networks, is_first_time,
+            filter_properties):
+        """Tries to call schedule_reserve_instance on the driver.
+        Sets instance vm_state to ERROR on exceptions
+        """
+        instance_uuids = request_spec['instance_uuids']
+        with compute_utils.EventReporter(context, conductor_api.LocalAPI(),
+                                         'schedule', *instance_uuids):
+            try:
+                return self.driver.schedule_reserve_instance(context,
+                        request_spec, admin_password, injected_files,
+                        requested_networks, is_first_time, filter_properties)
+
+            except exception.NoValidHost as ex:
+                # don't re-raise
+                self._set_vm_state_and_notify('reserve_instance',
+                                              {'vm_state': vm_states.ERROR,
+                                              'task_state': None},
+                                              context, ex, request_spec)
+            except Exception as ex:
+                with excutils.save_and_reraise_exception():
+                    self._set_vm_state_and_notify('reserve_instance',
+                                                  {'vm_state': vm_states.ERROR,
+                                                  'task_state': None},
+                                                  context, ex, request_spec)
+
     def run_instance(self, context, request_spec, admin_password,
             injected_files, requested_networks, is_first_time,
             filter_properties):

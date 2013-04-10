@@ -56,6 +56,48 @@ class FilterScheduler(driver.Scheduler):
         self.cost_function_cache = None
         self.options = scheduler_options.SchedulerOptions()
 
+    def schedule_reserve_instance(self, context, request_spec,
+                                  admin_password, injected_files,
+                                  requested_networks, is_first_time,
+                                  filter_properties):
+        payload = dict(request_spec=request_spec)
+        notifier.notify(context, notifier.publisher_id("scheduler"),
+                        'scheduler.reserve_instance.start', notifier.INFO,
+                        payload)
+
+        instance_uuids = request_spec.pop('instance_uuids')
+        num_instances = len(instance_uuids)
+        instance_host_map = {}
+        LOG.debug(_("Attempting to reserve %(num_instances)d instance(s)") %
+                locals())
+
+        weighed_hosts = self._schedule(context, request_spec,
+                filter_properties, instance_uuids)
+
+        # NOTE(comstud): Make sure we do not pass this through.  It
+        # contains an instance of RpcContext that cannot be serialized.
+        filter_properties.pop('context', None)
+
+        for num, instance_uuid in enumerate(instance_uuids):
+            request_spec['instance_properties']['launch_index'] = num
+
+            try:
+                weighed_host = weighed_hosts.pop(0)
+                instance_host_map[instance_uuid] = weighed_host.to_dict()
+
+            except IndexError:
+                raise exception.NoValidHost(reason="")
+
+            # scrub retry host list in case we're scheduling multiple
+            # instances:
+            retry = filter_properties.get('retry', {})
+            retry['hosts'] = []
+
+        notifier.notify(context, notifier.publisher_id("scheduler"),
+                        'scheduler.reserve_instance.end', notifier.INFO,
+                        payload)
+        return instance_host_map
+
     def schedule_run_instance(self, context, request_spec,
                               admin_password, injected_files,
                               requested_networks, is_first_time,

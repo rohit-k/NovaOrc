@@ -222,6 +222,13 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 mountpoint=mountpoint),
                 topic=_compute_topic(self.topic, ctxt, None, instance))
 
+    def attach_volume_boot(self, ctxt, instance, volume, mountpoint):
+        instance_p = jsonutils.to_primitive(instance)
+        self.call(ctxt, self.make_msg('attach_volume_boot',
+                instance=instance_p, volume=volume,
+                mountpoint=mountpoint),
+                topic=_compute_topic(self.topic, ctxt, None, instance))
+
     def change_instance_metadata(self, ctxt, instance, diff):
         instance_p = jsonutils.to_primitive(instance)
         self.cast(ctxt, self.make_msg('change_instance_metadata',
@@ -539,6 +546,19 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 topic=_compute_topic(self.topic, ctxt, host, None),
                 version='2.19')
 
+    def orc_run_instance(self, ctxt, instance, host, request_spec,
+                     filter_properties, network_info, block_device_info,
+                     injected_files, admin_password,
+                     is_first_time, node=None):
+        instance_p = jsonutils.to_primitive(instance)
+        self.cast(ctxt, self.make_msg('orc_run_instance', instance=instance_p,
+                request_spec=request_spec, filter_properties=filter_properties,
+                network_info=network_info, block_device_info=block_device_info,
+                injected_files=injected_files, admin_password=admin_password,
+                is_first_time=is_first_time, node=node),
+                topic=_compute_topic(self.topic, ctxt, host, None),
+                version='2.19')
+
     def set_admin_password(self, ctxt, instance, new_pass):
         instance_p = jsonutils.to_primitive(instance)
         return self.call(ctxt, self.make_msg('set_admin_password',
@@ -629,6 +649,18 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         self.cast(ctxt, self.make_msg('restore_instance',
                 instance=instance_p),
                 topic=_compute_topic(self.topic, ctxt, None, instance))
+
+    def macs_for_instance(self, ctxt, instance):
+        instance_p = jsonutils.to_primitive(instance)
+        return self.call(ctxt, self.make_msg('macs_for_instance',
+                instance=instance_p),
+                topic=_compute_topic(self.topic, ctxt, None, instance))
+
+    def get_volume_connector(self, ctxt, instance):
+        instance_p = jsonutils.to_primitive(instance)
+        return self.call(ctxt, self.make_msg('get_volume_connector',
+            instance=instance_p),
+            topic=_compute_topic(self.topic, ctxt, None, instance))
 
 
 class SecurityGroupAPI(nova.openstack.common.rpc.proxy.RpcProxy):

@@ -1343,6 +1343,11 @@ def cell_get_all(context):
 ####################
 
 
+def instance_metadata_get_all(context, search_filts):
+    """Get all metadata for an instance."""
+    return IMPL.instance_metadata_get_all(context, search_filts)
+
+
 def instance_metadata_get(context, instance_uuid):
     """Get all metadata for an instance."""
     return IMPL.instance_metadata_get(context, instance_uuid)
@@ -1717,3 +1722,50 @@ def archive_deleted_rows_for_table(context, tablename, max_rows=None):
     """
     return IMPL.archive_deleted_rows_for_table(context, tablename,
                                                max_rows=max_rows)
+
+
+####################
+
+
+def workflow_get(context, id):
+    """"Get a workflow by id"""
+    return IMPL.workflow_get(context, id)
+
+
+def workflow_type_get(context, id):
+    """Get a workflow type by id."""
+    return IMPL.workflow_type_get(context, id)
+
+
+def workflow_request_create(context, values):
+    """Create a workflow request from the values dictionary."""
+    return IMPL.workflow_request_create(context, values)
+
+
+def workflow_request_get(context, workflow_request_id):
+    """Get a workflow request or raise if it does not exist."""
+    return IMPL.workflow_request_get(context, workflow_request_id)
+
+
+def workflow_request_get_all(context):
+    """Get all workflow requests ."""
+    return IMPL.workflow_get_all(context)
+
+
+def workflow_request_update(context, workflow_request_id, values):
+    """Set the given properties on a workflow_request and update it.
+
+    Raises NotFound if workflow_request does not exist.
+
+    """
+    return IMPL.workflow_request_update(context, workflow_request_id, values)
+
+
+def workflow_request_delete(context, workflow_request_id):
+    """Delete a workflow_request from the database."""
+    return IMPL.workflow_request_delete(context, workflow_request_id)
+
+
+def workflow_request_get_by_request_id(context, request_id):
+    """Get a workflow request by request id or raise if it does not exist."""
+    return IMPL.workflow_request_get_by_request_id(context, request_id)

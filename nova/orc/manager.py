@@ -25,14 +25,13 @@ from nova.db import base
 from nova import manager
 from nova import network
 from nova.openstack.common import importutils
-from nova.openstack.common import lockutils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import memorycache
+from nova.openstack.common.notifier import api as notifier
 from nova.orc import rpcapi as orc_rpcapi
-from nova.orc import utils as o_utils
+from nova.orc import states
 from nova.orc.resources import compute as compute_resource
 from nova.orc.states import compute as cs
-from nova.orc.states import workflow_states as wf_states
 from nova import utils
 from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova import volume
@@ -76,58 +75,112 @@ CONF.register_opts(reservation_driver_opts, group='orchestration')
 CONF.register_opts(provisioning_driver_opts, group='orchestration')
 
 
-class TrackedWorkflow(object):
+def _get_chain_state_name(chain, state_name, sep=":"):
+    return "%s%s%s" % (chain.name, sep, state_name)
+
+
+def _make_dynamic_state(driver_name, **kwargs):
+    return importutils.import_object(driver_name, **kwargs)
+
+
+class ResourceTrackingWorkflow(object):
     def __init__(self, db, context):
         self.db = db
         self.context = context
-
-    def _get_tracking_id(self):
-        tracking_id = utils.generate_uid('r')
-        # TODO(harlowja): Attach the tracking id to the resource in the db.
-        return tracking_id
+        self.admin_context = context.elevated()
 
     def _get_history(self, resource):
         # TODO(harlowja): get the list of workflows + states already performed
         # on this resource...
-        return []
+        actions = self.db.resource_tracker_actions_get(self.admin_context,
+                                                       resource.tracking_id)
+        LOG.debug(_("Getting the state history of %s"), resource.tracking_id)
+        LOG.debug(_("The state history is %s"), actions)
+        return actions
+
+    def _initialize_resource(self, resource):
+        if resource.tracking_id:
+            return
+        # Have to start tracking this resource so that we can know
+        # in the future what its tracking 'id' is so that we can
+        # reference its past work and resume from said previous states
+        # if needbe.
+        resource.tracking_id = utils.generate_uid('r')
+        what_started = {
+            'request_uuid': self.admin_context.request_id,
+            'tracking_id': resource.tracking_id,
+            'status': states.STARTING,
+        }
+        self.db.resource_tracker_create(self.admin_context, what_started)
+        LOG.debug(_("Starting to track request id %s fullfillment"
+                    " using tracking id %s"),
+                  self.admin_context.request_id, resource.tracking_id)
 
     def run(self, chains, resource, *args, **kwargs):
-        if not resource.reservation_id:
-            # Have to start tracking this resource
-            resource.tracking_id = self._get_tracking_id()
-
+        self._initialize_resource(resource)
         resource_history = self._get_history(resource)
 
         def change_tracker(context, state, state_name, chain, **kwargs):
-            if state == wf_states.COMPLETE:
-                full_name = "%s:%s" % (chain.name, state_name)
-                resource_history.append(full_name)
-                # TODO(harlowja): save it to the database so that the resource
-                # request can be tracked as to what is occuring to that resource
-                # as it moves between states...
+            full_name = _get_chain_state_name(chain, state_name)
+            if state == states.COMPLETED:
                 result = kwargs.get('result')
-                # Also save the result of that state change so that if later
-                # resumed that it can be resumed by a future 'orc' and possibly
-                # rolled-back by that future orc as well...
+                resource_history[full_name] = result
+                # NOTE(harlowja): save it to the database so that the resource
+                # request can be tracked as to what is occuring to the resource
+                # as it moves between states, and also save the result of that
+                # state change so that if later resumed that it can be resumed
+                # by a future 'orc' and possibly rolled-back by that future
+                # orc as well...
+                what_changed = {
+                    'tracking_id': resource.tracking_id,
+                    'action_performed': full_name,
+                    'action_result': jsonutils.dumps(result),
+                }
+                self.db.resource_tracker_action_create(self.admin_context,
+                                                       what_changed)
+                LOG.debug(_("Saving that %(tracking_id)s completed state"
+                            " %(action_performed)s with %(action_result)s"),
+                          what_changed)
+            elif state == states.STARTING:
+                LOG.debug(_("Starting state %s"), full_name)
+            elif state == states.ERRORED:
+                LOG.debug(_("Errored out during state %s"), full_name)
 
         def result_fetcher(context, state_name, chain):
-            full_name = "%s:%s" % (chain.name, state_name)
+            full_name = _get_chain_state_name(chain, state_name)
             if full_name in resource_history:
-                # Already have ran this flow + state, so lets send
-                # back its previous results (so that rollback can work
-                # correctly)
-                #
-                # TODO(harlowja): actually get the real object that was saved
-                # when it completed previously...
-                return {}
+                # NOTE(harlowja): Already have ran this flow + state,
+                # so lets send back its previous results (so that
+                # rollback can work correctly)
+                return resource_history[full_name]
             else:
                 return None
 
         for c in chains:
+            # NOTE(harlowja): Let us be able to notify others when states
+            # error/start/stop using this attached listener.
             if self not in c.listeners:
                 c.listeners.append(self)
+            # NOTE(harlowja): this one is used so that we can let the chain
+            # running algorithm know that we have already completed said state
+            # previously (so that it can skip).
             c.result_fetcher = result_fetcher
+            # NOTE(harlowja): Allow us to persist completion events and there
+            # results to a persistant storage, so that we can keep a history
+            # of the states that have occurred (useful for resumption).
+            c.change_tracker = change_tracker
             c.run(self.context, resource, *args, **kwargs)
+
+    def notify(self, context, status, state_name, chain, error=None, result=None):
+        event_type = 'orc_%s' % _get_chain_state_name(chain.name, state_name,
+                                                      sep=".")
+        payload = dict(status=status, result=result, error=error)
+        if status == states.ERRORED:
+            notifier.notify(context, notifier.publisher_id("orc"), event_type,
+                            notifier.ERROR, payload)
+        else:
+            notifier.notify(context, notifier.publisher_id("orc"), event_type,
+                            notifier.INFO, payload)
 
 
 class OrchestrationManager(manager.Manager):
@@ -142,9 +195,11 @@ class OrchestrationManager(manager.Manager):
         self.network_api = network.API()
         self.volume_api = volume.API()
         self.conductor_api = conductor.API()
+
+        # TODO: this should likely not be here, but instead should be
+        # using the conductor api??
         db_base = base.Base()
         self.db = db_base.db
-        self.mc = memorycache.get_client()
 
         super(OrchestrationManager, self).__init__(*args, **kwargs)
 
@@ -219,31 +274,28 @@ class OrchestrationManager(manager.Manager):
         # that can be accessed and provides other useful methods on said
         # fields...
         resource = self._create_resource(**kwargs)
-        runners = []
 
         # Define the validation state chain and it's performers
-        validate = o_utils.StateChain('validation')
+        validate = states.StateChain('validation')
         validate['policies'] = cs.ValidateResourcePolicies()
         validate['image'] = cs.ValidateResourceImage()
         validate['request'] = cs.ValidateResourceRequest()
-        runners.append(validate)
 
         # From here on out we start collecting all rollbacks into a single
         # list of chains since we are now affecting external state and
         # all post-validation states must be given the chance to rollback
-        db_entry = o_utils.StateChain('initial_db_entry')
+        db_entry = states.StateChain('initial_db_entry')
         db_entry['compute_create'] = cs.CreateComputeEntry()
-        runners.append(db_entry)
-        
-        # Now run this initial workflow
-        activator = TrackedWorkflow(self.db, context)
-        activator.run(runners, resource)
 
+        # Now run this initial workflow
+        activator = ResourceTrackingWorkflow(self.db, context)
+        activator.run([validate, db_entry], resource)
+
+        # Proxy to the real orc-api to get the rest of the work done...
         self.orc_rpcapi.reserve_and_provision_resources(context,
                                                         resource.to_dict())
 
-        return (resource.instances, resource.reservation_id)
-
+        return (resource.instances, resource.tracking_id)
 
     def reserve_and_provision_resources(self, context, resource):
         # Ok we should now be at a level of request sanity where we can
@@ -251,7 +303,8 @@ class OrchestrationManager(manager.Manager):
         # will fail immediately. It could though still fail due to the async
         # nature that this software runs.
         resource = self._create_resource(**resource)
-        make_state = importutils.import_object
+
+        # Arguments passed to all dynamic state creates...
         make_state_args = {
             'scheduler_rpcapi': self.scheduler_rpcapi,
             'conductor_api': self.conductor_api,
@@ -268,19 +321,20 @@ class OrchestrationManager(manager.Manager):
         # allows this entity to 'smartly' make those kind of combined placement
         # decisions instead of having to send 'hints' around that are
         # suboptimal and don't scale correctly...
-        reserve = o_utils.StateChain('reservation')
+        reserve = states.StateChain('reservation')
         reserve_instances_driver = CONF.orchestration.reserve_instances_driver
-        reserve['instances'] = make_state(reserve_instances_driver,
-                                          **make_state_args)
+        reserve['instances'] = _make_dynamic_state(reserve_instances_driver,
+                                                   **make_state_args)
         reserve_networks_driver = CONF.orchestration.reserve_networks_driver
-        reserve['networks'] = make_state(reserve_networks_driver,
-                                         **make_state_args)
+        reserve['networks'] = _make_dynamic_state(reserve_networks_driver,
+                                                  **make_state_args)
         reserve_volumes_driver = CONF.orchestration.reserve_volumes_driver
-        reserve['volumes'] = make_state(reserve_volumes_driver,
-                                        **make_state_args)
-        activator = TrackedRunner(self.db, context)
+        reserve['volumes'] = _make_dynamic_state(reserve_volumes_driver,
+                                                 **make_state_args)
+        activator = ResourceTrackingWorkflow(self.db, context)
         activator.run([reserve], resource)
 
+        # Now start to form the document that will say what is provisioned..
         provision_doc = compute_resource.MultiProvisionDocument()
         provision_doc.networks = reserve.results['networks']
         provision_doc.volumes = reserve.results['volumes']
@@ -304,23 +358,26 @@ class OrchestrationManager(manager.Manager):
         #     'ack' from each targeted hypervisor, and upon failure to receive
         #     said 'ack' decide it needs to decide how to best handle recovery
         #     of those instances.
-        provision = o_utils.StateChain('provisioning', parents=[reserve])
-        provision_networks_driver = CONF.orchestration.provision_networks_driver
-        provision['networks'] = make_state(provision_networks_driver,
-                                           **make_state_args)
+        provision = states.StateChain('provisioning', parents=[reserve])
+        provision_networks_driver = \
+                                  CONF.orchestration.provision_networks_driver
+        provision['networks'] = _make_dynamic_state(provision_networks_driver,
+                                                    **make_state_args)
         provision_volumes_driver = CONF.orchestration.provision_volumes_driver
-        provision['volumes'] = make_state(provision_volumes_driver,
-                                          **make_state_args)
-        provision_instances_driver = CONF.orchestration.provision_instances_driver
-        provision['instances'] = make_state(provision_instances_driver,
-                                            **make_state_args)
-        activator = TrackedRunner(self.db, context)
-        activator.run([reserve], resource, provision_doc)
+        provision['volumes'] = _make_dynamic_state(provision_volumes_driver,
+                                                   **make_state_args)
+        provision_instances_driver = \
+                                 CONF.orchestration.provision_instances_driver
+        provision['instances'] = _make_dynamic_state(
+                                                    provision_instances_driver,
+                                                    **make_state_args)
+        activator = ResourceTrackingWorkflow(self.db, context)
+        activator.run([provision], resource, provision_doc)
 
         # Now we need a state to wait for verifification that these instances
         # came up, and if it fails, then we should undo all the other actions
         # done.
-        validation = o_utils.StateChain('validation', parents=[provision])
+        validation = states.StateChain('validation', parents=[provision])
         validation['ensure_booted'] = cs.ValidateBooted(**make_state_args)
-        activator = TrackedRunner(self.db, context)
-        activator.run([validation], resource)
+        activator = ResourceTrackingWorkflow(self.db, context)
+        activator.run([validation], resource, provision_doc)

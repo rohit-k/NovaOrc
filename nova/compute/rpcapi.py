@@ -224,7 +224,7 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
 
     def attach_volume_boot(self, ctxt, instance, volume, mountpoint):
         instance_p = jsonutils.to_primitive(instance)
-        self.call(ctxt, self.make_msg('attach_volume_boot',
+        return self.call(ctxt, self.make_msg('attach_volume_boot',
                 instance=instance_p, volume=volume,
                 mountpoint=mountpoint),
                 topic=_compute_topic(self.topic, ctxt, None, instance))

@@ -17,24 +17,120 @@
 #    under the License.
 
 import abc
+import copy
 
-from nova.compute import rpcapi as compute_rpcapi
-from nova import conductor
+try:
+    from collections import OrderedDict
+except IOError:
+    from ordereddict import OrderedDict
+
+from nova import exception as excp
 from nova.db import base
-from nova import network
-from nova.scheduler import rpcapi as scheduler_rpcapi
+from nova.openstack.common import excutils
+from nova.openstack.common import log as logging
 
-# Useful to know when other states
-# are being activated and finishing...
-#
-# TODO(harlowja): likely these should be
-# properties of the state (at least the non-basic ones)
-STARTING = 0
-COMPLETED = 2
-POLICIES_VALIDATED = 3
-IMAGE_VALIDATED = 4
-REQUEST_VALIDATED = 5
-CREATED_DB_ENTRY = 6
+LOG = logging.getLogger(__name__)
+
+# Useful to know when other states are being activated and finishing.
+STARTING = 'STARTING'
+COMPLETED = 'COMPLETED'
+ERRORED = 'ERRORED'
+
+
+class StateChain(object):
+    def __init__(self, name, tolerant=False, parents=None):
+        self.reversions = []
+        self.name = name
+        self.tolerant = tolerant
+        self.states = OrderedDict()
+        self.results = OrderedDict()
+        self.parents = parents
+        self.result_fetcher = lambda (c, n, s): None
+        self.change_tracker = lambda (c, n, s): None
+        self.listeners = []
+
+    def __setitem__(self, name, performer):
+        self.states[name] = performer
+
+    def __getitem__(self, name):
+        return self.results[name]
+
+    def run(self, context, *args, **kwargs):
+        for (name, performer) in self.states.items():
+            try:
+                self._on_state_start(context, performer, name)
+                # See if we have already ran this...
+                result = self.result_fetcher(context, name, self)
+                if result is None:
+                    result = performer.apply(context, *args, **kwargs)
+                # Keep a pristine copy of the result in the results table
+                # so that if said result is altered by other further states
+                # the one here will not be.
+                self.results[name] = copy.deepcopy(result)
+                self._on_state_finish(context, performer, name, result)
+            except Exception as ex:
+                with excutils.save_and_reraise_exception():
+                    try:
+                        self._on_state_error(context, name, ex)
+                    except:
+                        pass
+                    cause = (name, performer, (args, kwargs))
+                    self.rollback(context, name, self, ex, cause)
+        return self
+
+    def _on_state_error(self, context, name, ex):
+        self.change_tracker(context, ERRORED, name, self)
+        for i in self.listeners:
+            i.notify(context, ERRORED, name, self, error=ex)
+
+    def _on_state_start(self, context, performer, name):
+        self.change_tracker(context, STARTING, name, self)
+        for i in self.listeners:
+            i.notify(context, STARTING, name, self)
+
+    def _on_state_finish(self, context, performer, name, result):
+        # If a future state fails we need to ensure that we
+        # revert the one we just finished.
+        self.reversions.append((name, performer))
+        self.change_tracker(context, COMPLETED, name, self,
+                            result=result.to_dict())
+        for i in self.listeners:
+            i.notify(context, COMPLETED, name, self, result=result)
+
+    def rollback(self, context, name, chain=None, ex=None, cause=None):
+        if chain is None:
+            chain = self
+        for (i, (name, performer)) in enumerate(reversed(self.reversions)):
+            try:
+                performer.revert(context, self.results[name], chain, ex, cause)
+            except excp.NovaException:
+                # Ex: WARN: Failed rolling back stage 1 (validate_request) of
+                #           chain validation due to nova exception
+                # WARN: Failed rolling back stage 2 (create_db_entry) of
+                #       chain init_db_entry due to nova exception
+                msg = _("Failed rolling back stage %s (%s)"
+                        " of chain %s due to nova exception.")
+                LOG.warn(msg, (i + 1), performer.name, self.name)
+                if not self.tolerant:
+                    # This will log a msg AND re-raise the Nova exception if
+                    # the chain does not tolerate exceptions
+                    raise
+            except Exception:
+                # Ex: WARN: Failed rolling back stage 1 (validate_request) of
+                #           chain validation due to unknown exception
+                #     WARN: Failed rolling back stage 2 (create_db_entry) of
+                #           chain init_db_entry due to unknown exception
+                msg = _("Failed rolling back stage %s (%s)"
+                        " of chain %s, due to unknown exception.")
+                LOG.warn(msg, (i + 1), performer.name, self.name)
+                if not self.tolerant:
+                    # Log a msg AND re-raise the generic Exception if the
+                    # Chain does not tolerate exceptions
+                    raise
+        if self.parents:
+            # Rollback any parents chains
+            for p in self.parents:
+                p.rollback(context, name, chain, ex, cause)
 
 
 class State(base.Base):
@@ -42,10 +138,9 @@ class State(base.Base):
 
     def __init__(self):
         super(State, self).__init__()
-        self.name = self.__class__.__name__
 
     def __str__(self):
-        return "State: %s" % (self.name)
+        return "State: %s" % (self.__class__.__name__)
 
     @abc.abstractmethod
     def apply(self, context, *args, **kwargs):
@@ -54,15 +149,11 @@ class State(base.Base):
     def revert(self, context, result, chain, excp, cause):
         pass
 
-    # Used to notify state when another the overall progress
-    # of another state (or this state) changes
-    def notify(self, context, state, performer_name, chain, *args, **kwargs):
-        pass
-
 
 class ResourceUsingState(State):
     def __init__(self, **kwargs):
         super(ResourceUsingState, self).__init__()
+        self.name = self.__class__.__name__
         self.compute_rpcapi = kwargs.get("compute_rpcapi")
         self.conductor_api = kwargs.get("conductor_api")
         self.network_api = kwargs.get("network_api")

@@ -19,22 +19,22 @@
 from oslo.config import cfg
 
 from nova.openstack.common import log as logging
-from nova.orc.states import plugins
+from nova.orc import states
+from nova.orc import utils as orc_utils
 
 
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 
-class ProvisionNetworksDriver(plugins.ProvisioningDriver):
+class ProvisionNetworksDriver(states.ResourceUsingState):
     """Driver that implements network provisioning"""
 
     def __init__(self, **kwargs):
         super(ProvisionNetworksDriver, self).__init__(**kwargs)
 
-    def provision(self, context, resource, provision_doc):
-        pass
+    def apply(self, context, resource, provision_doc, **kwargs):
+        return orc_utils.DictableObject()
 
-    def get(self, context, *args, **kwargs):
-        #should return same resource as that in reserve method
+    def revert(self, context, result, chain, excp, cause):
         pass

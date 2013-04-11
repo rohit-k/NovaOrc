@@ -21,32 +21,35 @@ from oslo.config import cfg
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova.openstack.common import log as logging
-from nova.orc.states import plugins
+from nova.orc import states
+from nova.orc import utils as orc_utils
 
 
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 
-class ProvisionInstancesDriver(plugins.ProvisioningDriver):
+class ProvisionInstancesDriver(states.ResourceUsingState):
     """Driver that implements instance provisioning"""
 
     def __init__(self, **kwargs):
         super(ProvisionInstancesDriver, self).__init__(**kwargs)
 
-    def provision(self, context, resource, provision_doc):
-        instances = provision_doc.instances
-        networks = provision_doc.networks
-        volumes = provision_doc.volumes
+    def apply(self, context, resource, provision_doc, **kwargs):
+        instances = provision_doc.instances.instance_host_map
+        networks = provision_doc.networks.instance_network_map
+        LOG.debug(provision_doc.volumes)
+        volumes = provision_doc.volumes.instance_volume_map
 
         for instance in resource.instances:
             weighed_host = instances[instance['uuid']]
             network_info = networks[instance['uuid']]
             block_device_info = volumes.get(instance['uuid'])
 
-            instance = self._instance_update(context, instance['uuid'],
-                            vm_state=vm_states.BUILDING,
-                            task_state=task_states.SPAWNING)
+            instance = self.conductor_api.instance_update(context,
+                                              instance['uuid'],
+                                              vm_state=vm_states.BUILDING,
+                                              task_state=task_states.SPAWNING)
 
             self.compute_rpcapi.orc_run_instance(context, instance=instance,
                                 host=weighed_host['host'],
@@ -61,6 +64,7 @@ class ProvisionInstancesDriver(plugins.ProvisioningDriver):
                             # TODO(rohit): Hard-set node=None above for now
                             # since as scheduler does weighed_host.obj.nodename
 
-    def get(self, context, resource, provision_doc):
-        #should return same resource as that in reserve method
+        return orc_utils.DictableObject()
+
+    def revert(self, context, result, chain, excp, cause):
         pass

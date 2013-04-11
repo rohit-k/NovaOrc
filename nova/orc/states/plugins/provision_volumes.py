@@ -21,7 +21,7 @@ from oslo.config import cfg
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.orc import states
-from nova.orc import orc_utils
+from nova.orc import utils as orc_utils
 
 
 CONF = cfg.CONF
@@ -31,12 +31,11 @@ LOG = logging.getLogger(__name__)
 class ProvisionVolumesDriver(states.ResourceUsingState):
     """Driver that implements volume provisioning"""
     def apply(self, context, resource, provision_doc):
-        volumes = provision_doc.volumes
-        instance_volume_map = {}
+        instance_volume_map = provision_doc.volumes.instance_volume_map
         block_device_mapping = []
 
         for instance in resource.instances:
-            block_device_info = volumes.get(instance['uuid'])
+            block_device_info = instance_volume_map.get(instance['uuid'])
             if not block_device_info:
                 continue
             for bdm in block_device_info['block_device_mapping']:
@@ -60,5 +59,7 @@ class ProvisionVolumesDriver(states.ResourceUsingState):
                 block_device_info['block_device_mapping'] = \
                                                         block_device_mapping
                 instance_volume_map[instance['uuid']] = block_device_info
-        provision_doc.volumes = instance_volume_map
         return orc_utils.DictableObject()
+
+    def revert(self, context, result, chain, excp, cause):
+        pass

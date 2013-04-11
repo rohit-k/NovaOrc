@@ -42,7 +42,7 @@ def _orchestration_topic(topic, ctxt, host, workflow_request):
                      workflow_request['host']
 
     :returns: A topic string
-    '''reserve_retry.py
+    '''
     if not host:
         if not workflow_request:
             raise exception.NovaException(_('No orchestration host specified'))

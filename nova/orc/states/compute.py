@@ -18,6 +18,7 @@
 #    under the License.
 
 import base64
+import datetime
 import time
 import uuid
 
@@ -37,6 +38,7 @@ from nova.network.security_group import openstack_driver
 from nova import notifications
 from nova.openstack.common import excutils
 from nova.openstack.common import jsonutils
+from nova.openstack.common import timeutils
 from nova.openstack.common import log as logging
 from nova.orc import states
 from nova.orc import utils as orc_utils
@@ -46,8 +48,17 @@ from nova import utils
 
 
 LOG = logging.getLogger(__name__)
+validate_boot_opts = [
+    cfg.IntOpt('validate_boot_timeout',
+        default=900,
+        help='Time in seconds to check if instance is in ACTIVE state.'),
+    cfg.IntOpt('validate_boot_check_interval',
+        default=1,
+        help='Time interval in seconds to sleep until timeout'),
+]
 
 CONF = cfg.CONF
+CONF.register_opts(validate_boot_opts, group='orchestration')
 CONF.import_opt('allow_resize_to_same_host', 'nova.compute.api')
 CONF.import_opt('default_schedule_zone', 'nova.compute.api')
 CONF.import_opt('multi_instance_display_name_template', 'nova.compute.api')
@@ -72,8 +83,7 @@ class ValidateResourcePolicies(states.ResourceUsingState):
         self._check_create_policies(context, resource.availability_zone,
                                     resource.requested_networks,
                                     resource.block_device_mapping)
-        return orc_utils.DictableObject(name='validate_policies',
-                                        state=states.POLICIES_VALIDATED,
+        return orc_utils.DictableObject(details='policies_validated',
                                         resource=resource)
 
     def _check_create_policies(self, context, availability_zone,
@@ -158,8 +168,7 @@ class ValidateResourceImage(states.ResourceUsingState):
                                                            resource.ramdisk_id,
                                                            resource.image)
 
-        return orc_utils.DictableObject(name='validate_image',
-                                        state=states.IMAGE_VALIDATED,
+        return orc_utils.DictableObject(details='image_validated',
                                         resource=resource)
 
 
@@ -387,8 +396,7 @@ class ValidateResourceRequest(states.ResourceUsingState):
         resource.system_metadata = instance_types.save_instance_type_info(
                                 dict(), resource.instance_type)
 
-        return orc_utils.DictableObject(name='validate_request',
-                                        state=states.REQUEST_VALIDATED,
+        return orc_utils.DictableObject(details='request_validated',
                                         resource=resource)
 
     def revert(self, context, result, chain, excp, cause):
@@ -493,25 +501,6 @@ class CreateComputeEntry(states.ResourceUsingState):
 
         return instance
 
-    '''
-    def _create_db_entry_for_new_workflow_request(self, context,
-                                                 workflow_status,
-                                                 workflow_type_id,
-                                                 workflow_id,
-                                                 instance_uuid=None):
-        """Create an entry in the db and initiate a new workflow request
-        for this state chain performer.
-        """
-        values = {'status': workflow_status,
-                  'workflow_type_id': workflow_type_id,
-                  'current_workflow_id': workflow_id,
-                  'instance_uuid': instance_uuid}
-        elevated = context.elevated()
-        workflow_request = self.db.workflow_request_create(elevated, values)
-
-        return workflow_request
-    '''
-
     #NOTE(bcwaldon): No policy check since this is only used by scheduler and
     # the compute api. That should probably be cleaned up, though.
     def _create_db_entry_for_new_instance(self, context, image,
@@ -581,7 +570,6 @@ class CreateComputeEntry(states.ResourceUsingState):
         self.security_group_api = \
                     openstack_driver.get_openstack_security_group_driver()
 
-        resource.instance_uuids = []
         base_options = {
             'reservation_id': resource.reservation_id,
             'image_ref': resource.image_href,
@@ -600,8 +588,8 @@ class CreateComputeEntry(states.ResourceUsingState):
             'vcpus': resource.instance_type['vcpus'],
             'root_gb': resource.instance_type['root_gb'],
             'ephemeral_gb': resource.instance_type['ephemeral_gb'],
-            'display_name': resource.display.name,
-            'display_description': resource.display.description,
+            'display_name': resource.display_name,
+            'display_description': resource.display_description,
             'user_data': resource.user_data,
             'key_name': resource.key_name,
             'key_data': resource.key_data,
@@ -619,12 +607,11 @@ class CreateComputeEntry(states.ResourceUsingState):
 
         base_options.update(options_from_image)
 
-        LOG.debug(_("Going to run %s instances...")
-                    % resource.num_instances)
+        LOG.debug(_("Going to run %s instances..."), resource.num_instances)
 
         filter_properties = dict(scheduler_hints=resource.scheduler_hints)
         if resource.forced_host:
-            check_policy(context, 'create:forced_host', {})
+            _check_policy(context, 'create:forced_host', {})
             filter_properties['force_hosts'] = [resource.forced_host]
 
         resource.filter_properties = filter_properties
@@ -639,7 +626,6 @@ class CreateComputeEntry(states.ResourceUsingState):
                                              resource.block_device_mapping,
                                              resource.num_instances, i)
             resource.instances.append(jsonutils.to_primitive(instance))
-            resource.instance_uuids.append(instance['uuid'])
 
             # send a state update notification for the initial create to
             # show it going from non-existent to BUILDING
@@ -649,23 +635,12 @@ class CreateComputeEntry(states.ResourceUsingState):
         # Commit the reservations
         QUOTAS.commit(context, resource.quota_reservations)
 
-        request_spec = {
-            'image': jsonutils.to_primitive(resource.image),
-            'instance_properties': base_options,
-            'instance_type': resource.instance_type,
-            'instance_uuids': self.instance_uuids,
-            'block_device_mapping': resource.block_device_mapping,
-            'security_group': resource.security_group,
-        }
-        resource.request_spec = request_spec
-
         # Record the starting of instances in the db
         for instance in resource.instances:
             self._record_action_start(context, instance,
                 instance_actions.CREATE)
 
-        return orc_utils.DictableObject(name='create_db_entry',
-                                        state=states.CREATED_DB_ENTRY,
+        return orc_utils.DictableObject(details='created_db_entry',
                                         resource=resource)
 
     def revert(self, context, result, chain, excp, cause):
@@ -673,8 +648,8 @@ class CreateComputeEntry(states.ResourceUsingState):
         # quota reservations.
         with excutils.save_and_reraise_exception():
             try:
-                for instance_uuid in result.resource.instance_uuids:
-                    self.db.instance_destroy(context, instance_uuid)
+                for instance in result.resource.instances:
+                    self.db.instance_destroy(context, instance['uuid'])
             finally:
                 if result.resource.quota_reservations:
                     QUOTAS.rollback(context,
@@ -683,20 +658,46 @@ class CreateComputeEntry(states.ResourceUsingState):
 
 class ValidateBooted(states.ResourceUsingState):
 
-    def apply(self, context, *args, **kwargs):
+    def apply(self, context, resource, provision_doc, **kwargs):
         # TODO: Wait a given amount of time, periodically checking the database
         # to see if the instance has came online, if after X amount of time
         # it has not came online then ack the hypervisor directly to check
         # if its online, if that doesn't work, bail out by performing different
         # types of reconciliation in the revert method here...
-        pass
 
-    def revert(self, context, *args, **kwargs):
-        # TODO: perform different types of reconciliation here, possibly a 
+        timeout = CONF.orchestration.validate_boot_timeout
+        check_interval = CONF.orchestration.validate_boot_check_interval
+        provisioning_result = provision_doc.instances.instance_host_map
+        instance_uuids = provisioning_result.keys()
+        filters = {'uuid': [uuid for uuid in instance_uuids],
+                   'vm_state': vm_states.ACTIVE}
+        start = datetime.datetime.now()
+        all_instances_active = False
+        while timeutils.delta_seconds(start, datetime.datetime.now())\
+                                                                <= timeout:
+            active_instances = self.conductor_api.instance_get_all_by_filters(
+                                                              context, filters)
+            if len(active_instances) == len(provisioning_result):
+                all_instances_active = True
+                LOG.debug("All instances ACTIVE. Request tracking %s complete",
+                           resource.tracking_id)
+                self.db.resource_tracker_update(context, resource.tracking_id,
+                                                {'status': states.COMPLETED})
+                break
+
+            time.sleep(check_interval)
+        if not all_instances_active:
+            # Check hypervisor ack
+            # revert
+            pass
+        return orc_utils.DictableObject()
+
+    def revert(self, context, result, chain, excp, cause):
+        # TODO: perform different types of reconciliation here, possibly a
         # dynamic driver can be loaded that will be given an instance and where
         # it was supposed to be and ask said driver to resolve what to do, the
-        # driver could return codes like PASS, REVERT_ALL, and so on, where PASS
-        # would mean to just leave it alone (likely in error state) and REVERT_ALL
-        # would mean to start reverting all changes made (including all instances
-        # which did boot correctly...)
+        # driver could return codes like PASS, REVERT_ALL, etc, where PASS
+        # would mean to just leave it alone (likely in error state) and
+        # REVERT_ALL would mean to start reverting all changes made
+        # (including all instances which did boot correctly...)
         pass

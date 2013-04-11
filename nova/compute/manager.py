@@ -937,7 +937,6 @@ class ComputeManager(manager.SchedulerDependentManager):
 
             network_info = self._get_instance_nw_info(context, instance)
             try:
-         reserve_retry.py       ack = 0
                 limits = filter_properties.get('limits', {})
                 with rt.instance_claim(context, instance, limits):
 
@@ -945,17 +944,10 @@ class ComputeManager(manager.SchedulerDependentManager):
                                      not instance['access_ip_v4'] and
                                      not instance['access_ip_v6'])
 
-                    current_power_state = self._orc_spawn(context, instance,
+                    self._orc_spawn(context, instance,
                                 image_meta, network_info, block_device_info,
                                 injected_files, admin_password,
                                 set_access_ip=set_access_ip)
-                    if current_power_state == power_state.RUNNING:
-                        ack = 1
-
-                    self.orc_rpcapi.hypervisor_ack(context,
-                                instance_uuid=instance['uuid'],
-                                power_state=current_power_state,
-                                ack=ack)
 
             except exception.InstanceNotFound:
                 # TODO(harlowja): likely the orchestration unit should handle
@@ -964,9 +956,9 @@ class ComputeManager(manager.SchedulerDependentManager):
                 # end its the only one that has knowledge of which resources
                 # are being provided to this vm.
                 #
-                # Note: that we need to have good knowledge of what the error was
-                # and communicate it back to the orchestrator so that the orchestrator
-                # can handle rollback which can be error dependent...
+                # Note: that we need to have good knowledge of what the error
+                # was and communicate it back to the orchestrator so that the
+                # orchestrator can handle rollback which can be error dependent
                 with excutils.save_and_reraise_exception():
                     try:
                         self._deallocate_network(context, instance)
@@ -998,8 +990,8 @@ class ComputeManager(manager.SchedulerDependentManager):
                         "create.end", network_info=network_info,
                         extra_usage_info=extra_usage_info)
         except Exception:
-            # TODO(harlowja): should the orchestration unit should be marking this as
-            # having errored and figuring what correct action to take??
+            # TODO(harlowja): should the orchestration unit should be marking
+            # this as having errored and figuring what correct action to take?
             with excutils.save_and_reraise_exception():
                 self._set_instance_error_state(context, instance['uuid'])
 
@@ -1283,6 +1275,12 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         current_power_state = self._get_power_state(context, instance)
 
+        update_data = dict(power_state=current_power_state,
+                           vm_state=vm_states.ACTIVE,
+                           task_state=None,
+                           expected_task_state=task_states.SPAWNING,
+                           launched_at=timeutils.utcnow())
+
         def _set_access_ip_values():
             """Add access ip values for a given instance.
 
@@ -1308,7 +1306,8 @@ class ComputeManager(manager.SchedulerDependentManager):
         if set_access_ip:
             _set_access_ip_values()
 
-        return current_power_state
+        return self._instance_update(context, instance['uuid'],
+                                     **update_data)
 
     def _notify_about_instance_usage(self, context, instance, event_suffix,
                                      network_info=None, system_metadata=None,
@@ -3038,6 +3037,20 @@ class ComputeManager(manager.SchedulerDependentManager):
                 capi = self.conductor_api
                 capi.block_device_mapping_destroy_by_instance_and_device(
                         context, instance, mountpoint)
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @reverts_task_state
+    @wrap_instance_fault
+    def attach_volume_boot(self, context, instance, volume, mountpoint):
+        """Attach a volume to an instance at boot time"""
+        try:
+            return self._attach_volume_boot(context, instance, volume,
+                                            mountpoint)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                capi = self.conductor_api
+                capi.block_device_mapping_destroy_by_instance_and_device(
+                    context, instance, mountpoint)
 
     def _attach_volume(self, context, volume_id, mountpoint, instance):
         volume = self.volume_api.get(context, volume_id)

@@ -32,30 +32,24 @@ def _multi_get_first(where, *keys):
     return None
 
 
-class Display(dict):
-    def __init__(self, name, description):
-        super(Display, self).__init__()
-        self.name = name
-        self.description = description
-
-
 class Create(orc_utils.DictableObject):
     def __init__(self, **kwargs):
-        # Attributes which we expect to always be there from the initia;
-        # create request...
+        # Attributes which we expect to always be there from the initial
+        # create request, others that are added on by various states will
+        # be automatically added...
         self.instance_type = kwargs.get('instance_type')
         self.image_href = kwargs.get('image_uuid')
         self.kernel_id = kwargs.get('kernel_id')
         self.ramdisk_id = kwargs.get('ramdisk_id')
+        self.image = kwargs.get('image')
 
         self.min_count = kwargs.get('min_count')
         self.max_count = kwargs.get('max_count')
 
-        display_name = kwargs.get('display_name')
-        display_description = _multi_get_first(kwargs, 'display_description',
-                                               'display_name')
-        self.display = Display(display_name, display_description)
-
+        self.display_name = kwargs.get('display_name')
+        self.display_description = _multi_get_first(kwargs,
+                                                    'display_description',
+                                                    'display_name')
         self.key_name = kwargs.get('key_name')
         self.key_data = None
         self.key_pair = _multi_get_first(kwargs, 'key_name', 'key_pair')
@@ -72,25 +66,13 @@ class Create(orc_utils.DictableObject):
         self.block_device_mapping = kwargs.get('block_device_mapping')
         self.auto_disk_config = kwargs.get('auto_disk_config')
         self.scheduler_hints = kwargs.get('scheduler_hints')
+        self.instances = kwargs.get('instances', [])
+        self.tracking_id = kwargs.get('tracking_id')
 
 
-class Instance(object):
-    def __init__(self, create_resource):
-        self.create_resource = create_resource
-        self.target = None
-
-
-class MultiProvisionDocument(object):
+class MultiProvisionDocument(orc_utils.DictableObject):
     def __init__(self):
         self.instances = []
         self.networks = []
         self.volumes = []
         self.images = []
-
-    def to_dict(self):
-        return {
-            "instances": self.instances,
-            "networks": self.networks,
-            "volumes": self.volumes,
-            "images": self.images
-        }

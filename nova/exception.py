@@ -1204,3 +1204,7 @@ class UnsupportedHardware(Invalid):
 
 class Base64Exception(NovaException):
     message = _("Invalid Base 64 data for file %(path)s")
+
+
+class ResourceTrackerNotFound(NotFound):
+    message = _("Resource tracker %(tracking_id)s could not be found.")

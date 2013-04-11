@@ -988,41 +988,19 @@ class TaskLog(BASE, NovaBase):
     errors = Column(Integer(), default=0)
 
 
-class Workflow(BASE, NovaBase):
-    """Represents a workflow"""
-    __tablename__ = 'workflow'
+class ResourceTrackerAction(BASE, NovaBase):
+    """Track action perfomed in each chain."""
+    __tablename__ = 'resource_tracker_action'
+    tracking_id = Column(String(length=255), primary_key=True, nullable=False)
+    action_performed = Column(String(length=255), primary_key=True,
+                              nullable=False)
+    action_result = Column(Text, nullable=False)
+
+
+class ResourceTracker(BASE, NovaBase):
+    """Map resource with tracking id."""
+    __tablename__ = 'resource_tracker'
     id = Column(Integer, primary_key=True, nullable=False)
-    name = Column(String(255), nullable=False)
-    workflow_type_id = Column(Integer, ForeignKey('workflow_types.id'),
-                              nullable=False)
-    next_workflow_id = Column(Integer)
-    primary_join = ('and_(WorkflowTypes.id == Workflow.workflow_type_id,'
-                  'WorkflowTypes.deleted == 0,'
-                  'Workflow.deleted == 0)')
-    workflows = relationship("WorkflowTypes", backref="workflows",
-                             primaryjoin=primary_join)
-
-
-class WorkflowTypes(BASE, NovaBase):
-    __tablename__ = 'workflow_types'
-    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
-    name = String(255)
-
-
-class WorkflowRequest(BASE, NovaBase):
-    """Represents a workflow for each request"""
-    __tablename__ = 'workflow_request'
-    id = Column(Integer, primary_key=True, nullable=False, autoincrement=True)
-    status = Column(String(36))
-    workflow_type_id = Column(Integer, ForeignKey('workflow_types.id'),
-                              nullable=False)
-    current_workflow_id = Column(Integer)
-    request_id = Column(String(255), nullable=False)
-
-    primary_join = ('and_('
-                    'WorkflowRequest.workflow_type_id == WorkflowTypes.id,'
-                    'WorkflowRequest.deleted == 0,'
-                    'WorkflowTypes.deleted == 0)')
-    workflow_type = relationship(WorkflowTypes,
-                                 foreign_keys=workflow_type_id,
-                                 primaryjoin=primary_join)
+    request_uuid = Column(String(length=255))
+    tracking_id = Column(String(length=255), nullable=False)
+    status = Column(String(length=255), nullable=True)

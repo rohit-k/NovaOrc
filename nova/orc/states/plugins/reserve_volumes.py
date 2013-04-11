@@ -25,18 +25,18 @@ from nova.compute import task_states
 from nova import exception
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
-from nova.orc.states import plugins
+from nova.orc import states
+from nova.orc import utils as orc_utils
 
 LOG = logging.getLogger(__name__)
 
 
-class ReserveVolumesDriver(plugins.ReservationDriver):
+class ReserveVolumesDriver(states.ResourceUsingState):
 
     def __init__(self, **kwargs):
         super(ReserveVolumesDriver, self).__init__(**kwargs)
 
-    def reserve(self, context, resource):
-
+    def apply(self, context, resource, *args, **kwargs):
         instance_volume_map = {}
         for instance in resource.instances:
             # These validations should happen in validation chain
@@ -48,7 +48,7 @@ class ReserveVolumesDriver(plugins.ReservationDriver):
             bdms = self.conductor_api.block_device_mapping_get_all_by_instance(
                 context, instance)
 
-            super(ReserveVolumesDriver, self)._instance_update(context,
+            self.conductor_api.instance_update(context,
                                 instance['uuid'],
                                 vm_state=vm_states.BUILDING,
                                 task_state=task_states.BLOCK_DEVICE_MAPPING)
@@ -57,7 +57,8 @@ class ReserveVolumesDriver(plugins.ReservationDriver):
                                                         instance, bdms)
             instance_volume_map[instance['uuid']] = block_device_info
 
-        return instance_volume_map
+        return orc_utils.DictableObject(resource=resource,
+                                    instance_volume_map=instance_volume_map)
 
     def _validate_bdm(self, context, instance):
         for bdm in self.db.block_device_mapping_get_all_by_instance(
@@ -263,9 +264,5 @@ class ReserveVolumesDriver(plugins.ReservationDriver):
                 LOG.exception(_('Instance failed block device setup'),
                     instance=instance)
 
-    def unreserve(self, context, *args, **kwargs):
-        pass
-
-    def get(self, context, *args, **kwargs):
-        #should return same resource as that in reserve method
+    def revert(self, context, result, chain, excp, cause):
         pass

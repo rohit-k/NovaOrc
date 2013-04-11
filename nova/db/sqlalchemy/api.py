@@ -4856,133 +4856,55 @@ def archive_deleted_rows(context, max_rows=None):
     return rows_archived
 
 
-####################                                                            
-                                                                                
-                                                                                
-def _workflow_get_query(context, read_deleted=None):                            
-    return model_query(context, models.Workflow, read_deleted=read_deleted)     
-                                                                                
-                                                                                
-@require_admin_context                                                          
-def workflow_get(context, id):                                                  
-    """Returns a specific workflow by id."""                                    
-    result = _workflow_get_query(context).filter_by(id=id).first()              
-                                                                                
-    if not result:                                                              
-        raise exception.WorkflowNotFound(workflow_id=id)                        
-                                                                                
-    return result                                                               
-                                                                                
-                                                                                
+####################
+#Resource Tracker
 ####################
 
-
-@require_admin_context                                                          
-def workflow_type_get(context, workflow_type_id):                               
-    """Get a workflow type by id."""                                            
-    return model_query(context, models.WorkflowTypes).\                         
-                       filter_by(id=workflow_type_id).\                         
-                       options(joinedload('workflows')).\                       
-                       first()                                                  
-                                                                                
-                                                                                
-####################                                                            
-                                                                                
-                                                                                
-@require_admin_context                                                          
-def workflow_request_create(context, values):                                   
-    """Create a workflow request from the values dictionary."""                 
-    values = values.copy()                                                      
-    workflow_request_ref = models.WorkflowRequest()                             
-                                                                                
-    values['request_id'] = values.get('request_id') or context.request_id       
-                                                                                
-    workflow_request_ref.update(values)                                         
-                                                                                
-    session = get_session()                                                     
-    with session.begin():                                                       
-        try:                                                                    
-            workflow_request_ref.save(session=session)                          
-        except Exception, e:                                                    
-            raise db_exc.DBError(e)                                             
-        return workflow_request_ref
+@require_admin_context
+def resource_tracker_create(context, values):
+    resource_tracker_ref = models.ResourceTracker()
+    resource_tracker_ref.update(values)
+    resource_tracker_ref.save()
+    return resource_tracker_ref
 
 
-def _workflow_request_get(context, workflow_request_id, session=None):          
-    """Get a workflow request or raise if it does not exist."""                 
-                                                                                
-    if not session:                                                             
-        session = get_session()                                                 
-                                                                                
-    result = model_query(context, models.WorkflowRequest,                       
-                         session=session).\                                     
-                         options(joinedload('workflow_type')).\                 
-                         filter_by(id=workflow_request_id).first()              
-    if not result:                                                              
-        raise exception.WorkflowRequestNotFound(                                
-            workflow_request_id=workflow_request_id)                            
-                                                                                
-    return result                                                               
-                                                                                
-                                                                                
-def _workflow_request_get_by_request_id(context, request_id, session=None):     
-    """Get a workflow request or raise if it does not exist."""                 
-                                                                                
-    if not session:                                                             
-        session = get_session()                                                 
-                                                                                
-    result = model_query(context, models.WorkflowRequest,                       
-                         session=session).\                                     
-                         filter_by(request_id=request_id).first()               
-    if not result:                                                              
-        raise exception.WorkflowRequestNotFound(                                
-            workflow_request_id=request_id)                                     
-                                                                                
+@require_admin_context
+def resource_tracker_action_create(context, values):
+    """Set tracking id corresponding to its action performed in the chain"""
+    resource_tracker_action = models.ResourceTrackerAction()
+    resource_tracker_action.update(values)
+    resource_tracker_action.save()
+    return resource_tracker_action
+
+
+@require_admin_context
+def resource_tracker_actions_get(context, tracking_id):
+
+    query = model_query(context, models.ResourceTrackerAction).\
+                filter_by(tracking_id=tracking_id)
+    actions = {}
+    for action in query.all():
+        actions[action.action_performed] = action.action_result
+
+    return actions
+
+
+def _resource_tracker_get(context, tracking_id, session=None):
+    query = model_query(context, models.ResourceTracker, session=session).\
+                     filter_by(tracking_id=tracking_id)
+
+    result = query.first()
+    if not result:
+        raise exception.ResourceTrackerNotFound(tracking_id=tracking_id)
+
     return result
 
 
-@require_admin_context                                                          
-def workflow_request_get(context, workflow_request_id):                         
-    session = get_session()                                                     
-    return  _workflow_request_get(context, workflow_request_id,                 
-                                  session=session)                              
-                                                                                
-                                                                                
-@require_admin_context                                                          
-def workflow_request_get_by_request_id(context, request_id):                    
-    session = get_session()                                                     
-    return  _workflow_request_get_by_request_id(context, request_id,            
-                                  session=session)                              
-                                                                                
-                                                                                
-@require_admin_context                                                          
-def workflow_request_get_all(context):                                          
-    """Get all workflow requests."""                                            
-    return model_query(context, models.WorkflowRequest).all()                   
-                                                                                
-                                                                                
-@require_context                                                                
-def workflow_request_update(context, workflow_request_id, values):              
-    """Set the given properties on a workflow_request and update it.            
-                                                                                
-    Raises NotFound if workflow_request does not exist.                         
-                                                                                
-    """                                                                         
-    session = get_session()                                                     
-    with session.begin():                                                       
-        workflow_request_ref = _workflow_request_get(context,                   
-                                                    workflow_request_id,        
-                                                    session=session)            
-        workflow_request_ref.update(values)
-        workflow_request_ref.save(session=session)                              
-    return workflow_request_ref                                                 
-                                                                                
-                                                                                
-@require_admin_context                                                          
-def workflow_request_delete(context, workflow_request_id):                      
-    """Delete a workflow_request."""                                            
-    session = get_session()                                                     
-    with session.begin():                                                       
-        session.query(models.WorkflowRequest).\                                 
-                      filter_by(id=workflow_request_id).\                       
-                      soft_delete()
+def resource_tracker_update(context, tracking_id, values):
+    session = get_session()
+    with session.begin():
+        resource_tracker_ref = _resource_tracker_get(context, tracking_id,
+                                session=session)
+        resource_tracker_ref.update(values)
+        resource_tracker_ref.save(session=session)
+    return resource_tracker_ref

@@ -22,12 +22,13 @@ from nova.compute import task_states
 from nova.network.security_group import openstack_driver
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
-from nova.orc.states import plugins
+from nova.orc import states
+from nova.orc import utils as orc_utils
 
 LOG = logging.getLogger(__name__)
 
 
-class ReserveNetworksDriver(plugins.ReservationDriver):
+class ReserveNetworksDriver(states.ResourceUsingState):
 
     def __init__(self, **kwargs):
         super(ReserveNetworksDriver, self).__init__(**kwargs)
@@ -38,11 +39,12 @@ class ReserveNetworksDriver(plugins.ReservationDriver):
                           security_groups):
         """Allocate networks for an instance and return the network info."""
         # NOTE(rohit): Changed the expected_task_state from None to scheduling
-        instance = super(ReserveNetworksDriver, self)._instance_update(context,
+
+        self.conductor_api.instance_update(context,
                                     instance['uuid'],
                                     vm_state=vm_states.BUILDING,
-                                    task_state=task_states.NETWORKING,
-                                    expected_task_state=task_states.SCHEDULING)
+                                    task_state=task_states.NETWORKING)
+
         is_vpn = pipelib.is_vpn_image(instance['image_ref'])
         try:
             # allocate and get network info
@@ -58,7 +60,7 @@ class ReserveNetworksDriver(plugins.ReservationDriver):
                 LOG.exception(_('Instance failed network setup'),
                     instance=instance)
 
-    def reserve(self, context, resource):
+    def apply(self, context, resource, *args, **kwargs):
 
         instance_network_map = {}
         if resource.request_spec and self.is_quantum_security_groups:
@@ -73,13 +75,9 @@ class ReserveNetworksDriver(plugins.ReservationDriver):
 
             instance_network_map[instance['uuid']] = network_info
 
-        return instance_network_map
+        return orc_utils.DictableObject(resource=resource,
+                                    instance_network_map=instance_network_map)
 
-    def unreserve(self, context, resource):
-
-        for instance in resource.instances:
+    def revert(self, context, result, chain, excp, cause):
+        for instance in result.resource.instances:
             self.network_api.deallocate_for_instance(context, instance)
-
-    def get(self, context, *args, **kwargs):
-        #should return same resource as that in reserve method
-        pass

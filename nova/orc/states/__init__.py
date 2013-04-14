@@ -21,7 +21,7 @@ import copy
 
 try:
     from collections import OrderedDict
-except IOError:
+except ImportError:
     from ordereddict import OrderedDict
 
 from nova import exception as excp

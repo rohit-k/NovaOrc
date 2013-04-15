@@ -45,8 +45,8 @@ class StateChain(object):
         self.states = OrderedDict()
         self.results = OrderedDict()
         self.parents = parents
-        self.result_fetcher = lambda (c, n, s): None
-        self.change_tracker = lambda (c, n, s): None
+        self.result_fetcher = None
+        self.change_tracker = None
         self.listeners = []
 
     def __setitem__(self, name, performer):
@@ -60,7 +60,9 @@ class StateChain(object):
             try:
                 self._on_state_start(context, performer, name)
                 # See if we have already ran this...
-                result = self.result_fetcher(context, name, self)
+                result = None
+                if self.result_fetcher:
+                    result = self.result_fetcher(context, name, self)
                 if result is None:
                     result = performer.apply(context, *args, **kwargs)
                 # Keep a pristine copy of the result in the results table
@@ -79,12 +81,14 @@ class StateChain(object):
         return self
 
     def _on_state_error(self, context, name, ex):
-        self.change_tracker(context, ERRORED, name, self)
+        if self.change_tracker:
+            self.change_tracker(context, ERRORED, name, self)
         for i in self.listeners:
             i.notify(context, ERRORED, name, self, error=ex)
 
     def _on_state_start(self, context, performer, name):
-        self.change_tracker(context, STARTING, name, self)
+        if self.change_tracker:
+            self.change_tracker(context, STARTING, name, self)
         for i in self.listeners:
             i.notify(context, STARTING, name, self)
 
@@ -92,8 +96,9 @@ class StateChain(object):
         # If a future state fails we need to ensure that we
         # revert the one we just finished.
         self.reversions.append((name, performer))
-        self.change_tracker(context, COMPLETED, name, self,
-                            result=result.to_dict())
+        if self.change_tracker:
+            self.change_tracker(context, COMPLETED, name, self,
+                                result=result.to_dict())
         for i in self.listeners:
             i.notify(context, COMPLETED, name, self, result=result)
 

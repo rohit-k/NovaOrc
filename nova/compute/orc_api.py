@@ -43,14 +43,14 @@ class ComputeOrchestrationAPI(compute_api.API):
 
 
 class HostAPI(compute_api.HostAPI):
-    """HostAPI() class for orhestration service"""
+    """HostAPI() class for orchestration service"""
 
     def __init__(self):
         super(HostAPI, self).__init__()
 
 
 class InstanceActionAPI(compute_api.InstanceActionAPI):
-    """InstanceActionAPI() class for cells."""
+    """InstanceActionAPI() class for orchestration service"""
 
     def __init__(self):
         super(InstanceActionAPI, self).__init__()

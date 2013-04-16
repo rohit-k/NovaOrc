@@ -40,3 +40,17 @@ class ComputeOrchestrationAPI(compute_api.API):
     def delete(self, context, instance):
         """Terminate an instance."""
         super(ComputeOrchestrationAPI, self).delete(context, instance)
+
+
+class HostAPI(compute_api.HostAPI):
+    """HostAPI() class for orhestration service"""
+
+    def __init__(self):
+        super(HostAPI, self).__init__()
+
+
+class InstanceActionAPI(compute_api.InstanceActionAPI):
+    """InstanceActionAPI() class for cells."""
+
+    def __init__(self):
+        super(InstanceActionAPI, self).__init__()

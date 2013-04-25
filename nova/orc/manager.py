@@ -171,8 +171,10 @@ class ResourceTrackingWorkflow(object):
             c.change_tracker = change_tracker
             c.run(self.context, resource, *args, **kwargs)
 
-    def notify(self, context, status, state_name, chain, error=None, result=None):
-        event_type = 'orc_%s' % _get_chain_state_name(chain, state_name, sep=".")
+    def notify(self, context, status, state_name, chain, error=None,
+               result=None):
+        event_type = 'orc_%s' % _get_chain_state_name(chain, state_name,
+                                                      sep=".")
         payload = dict(status=status, result=result, error=error)
         if status == states.ERRORED:
             notifier.notify(context, notifier.publisher_id("orc"), event_type,

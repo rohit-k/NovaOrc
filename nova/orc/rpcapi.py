@@ -84,6 +84,3 @@ class OrchestrationAPI(nova.openstack.common.rpc.proxy.RpcProxy):
     def reserve_and_provision_resources(self, ctxt, resource):
         self.cast(ctxt, self.make_msg('reserve_and_provision_resources',
                                       resource=resource))
-
-    def hypervisor_ack(self, ctxt, **kwargs):
-        self.call(ctxt, self.make_msg('hypervisor_ack', **kwargs))

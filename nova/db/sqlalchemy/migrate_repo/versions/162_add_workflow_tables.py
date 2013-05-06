@@ -14,6 +14,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+try:
+    from collections import OrderedDict
+except IOError:
+    from ordereddict import OrderedDict
 
 from migrate import ForeignKeyConstraint
 from sqlalchemy import Boolean, Column, DateTime, Index, Integer
@@ -69,6 +73,7 @@ def upgrade(migrate_engine):
         try:
             table.create()
         except Exception:
+            LOG.info(repr(table))
             LOG.exception(_('Exception while creating table.'))
             raise
 

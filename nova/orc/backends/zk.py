@@ -39,38 +39,37 @@ class ZookeeperDriver(WorkflowPersistentBackendDriver):
 
     def __init__(self, **kwargs):
         self.zk = ZkProxy(QUEUES[0], BASE_ZK_API_VERSION)
-        self.history_path = None
 
     def resource_tracker_actions_get(self, context, tracking_id):
-        self.history_path = HISTORY_PATH + '/' + tracking_id
+        history_path = HISTORY_PATH + '/' + tracking_id
+        actions = {}
         try:
-            paths = self.zk.get_children(context, self.history_path + "/")
+            paths = self.zk.get_children(context, history_path + "/")
         except exceptions.NoNodeError:
             paths = []
         for p in paths:
             if not p.startswith(NODE_PREFIX):
                 continue
             try:
-                (data, _zk) = self.zk.get_data(context,
-                                               self.history_path + "/%s" % (p))
+                data = self.zk.get_data(context,
+                                        history_path + "/%s" % (p))
                 if data:
-                    return(jsonutils.loads(data))
+                    actions[p] = jsonutils.loads(data)
             except exceptions.NoNodeError:
                 pass
+        return actions
 
     def resource_tracker_create(self, context, data):
-        self.history_path = HISTORY_PATH + '/' + data['tracking_id']
-        self.zk.create_node(context, self.history_path + "/%s" % (NODE_PREFIX),
-                data)
+        path = HISTORY_PATH + '/' + data['tracking_id']
+        self.zk.create_node(context, path, data)
 
     def resource_tracker_action_create(self, context, data):
-        self.history_path = HISTORY_PATH + '/' + data['tracking_id']
-        self.zk.create_node(context, self.history_path + "/%s" % (NODE_PREFIX),
-                data)
+        path = HISTORY_PATH + '/' + data['tracking_id']
+        self.zk.create_node(context, path + "/" + data['action_performed'],
+                            data)
 
     # A method to update the zk-node to set status of action to
     # complete(would be called from the orc/states/compute)
     def resource_tracker_update(self, context, tracking_id, data):
-        self.history_path = HISTORY_PATH + '/' + tracking_id
-        self.zk.set_data(context, self.history_path + "/%s" % (NODE_PREFIX),
-                         data)
+        path = HISTORY_PATH + '/' + tracking_id
+        self.zk.set_data(context, path, data)

@@ -68,7 +68,6 @@ from nova.openstack.common.notifier import api as notifier
 from nova.openstack.common import rpc
 from nova.openstack.common.rpc import common as rpc_common
 from nova.openstack.common import timeutils
-from nova.orc import rpcapi as orc_rpcapi
 from nova import paths
 from nova import safe_utils
 from nova import utils
@@ -344,7 +343,6 @@ class ComputeManager(manager.SchedulerDependentManager):
         self.consoleauth_rpcapi = consoleauth.rpcapi.ConsoleAuthAPI()
         self.cells_rpcapi = cells_rpcapi.CellsAPI()
         self._resource_tracker_dict = {}
-        self.orc_rpcapi = orc_rpcapi.OrchestrationAPI()
 
         super(ComputeManager, self).__init__(service_name="compute",
                                              *args, **kwargs)

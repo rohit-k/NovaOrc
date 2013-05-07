@@ -39,3 +39,6 @@ class SqlDriver(WorkflowPersistentBackendDriver):
 
     def resource_tracker_action_create(self, context, data):
         self.db.resource_tracker_action_create(context, data)
+
+    def resource_tracker_update(self, context, tracking_id, data):
+        self.db.resource_tracker_update(context, tracking_id, data)

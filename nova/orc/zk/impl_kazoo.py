@@ -274,20 +274,11 @@ class Connection(object):
         while True:
             try:
                 return method(*args, **kwargs)
+            except exceptions.ConnectionLoss:
+                self.reconnect()
             except Exception, e:
                 if error_callback:
                     error_callback(e)
-            except exceptions.ConnectionLoss:
-                self.reconnect()
-
-    def ensure_once(self, error_callback, method, *args, **kwargs):
-        try:
-            return method(*args, **kwargs)
-        except Exception, e:
-            if error_callback:
-                error_callback(e)
-        except exceptions.ConnectionLoss:
-            self.reconnect()
 
     def close(self):
         """Close/release this connection"""
@@ -399,7 +390,7 @@ class Connection(object):
         def _create_node():
             self.connection.create(path, data, makepath=True, ephemeral=False)
 
-        self.ensure_once(_error_callback, _create_node)
+        self.ensure(_error_callback, _create_node)
 
     def consume(self, limit=None):
         """Consume from all queues/consumers"""
@@ -453,7 +444,7 @@ class Connection(object):
         def _get():
             return self.connection.get(path)
 
-        self.ensure_once(_error_callback, _get)
+        self.ensure(_error_callback, _get)
 
     def set_data(self, path, data):
         data = json.dumps(data)
@@ -467,7 +458,7 @@ class Connection(object):
             #msg = json.dumps(data)
             return self.connection.set(path, data)
 
-        self.ensure_once(_error_callback, _set)
+        self.ensure(_error_callback, _set)
 
 
 def create_connection(conf, new=True):

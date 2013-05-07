@@ -3,7 +3,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2013 Yahoo! Inc. All Rights Reserved.
-# Copyright (c) 2013 NTT Data. All Rights Reserved.
+# Copyright 2013 NTT Data.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -21,20 +21,21 @@ from oslo.config import cfg
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import conductor
-from nova.db import base
 from nova import manager
 from nova import network
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier
-from nova.orc import rpcapi as orc_rpcapi
 from nova.orc import states
 from nova.orc.resources import compute as compute_resource
 from nova.orc.states import compute as cs
+from nova.orc import zk
+from nova.orc.zk import dispatcher as zk_dispatcher
 from nova import utils
 from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova import volume
+
 
 LOG = logging.getLogger(__name__)
 
@@ -73,6 +74,10 @@ provisioning_driver_opts = [
 CONF = cfg.CONF
 CONF.register_opts(reservation_driver_opts, group='orchestration')
 CONF.register_opts(provisioning_driver_opts, group='orchestration')
+CONF.import_opt('worfklow_persistent_backend_driver', 'nova.orc.opts',
+                group='orchestration')
+CONF.import_opt('workflow_messaging_driver', 'nova.orc.opts',
+                group='orchestration')
 
 
 def _get_chain_state_name(chain, state_name, sep=":"):
@@ -84,16 +89,17 @@ def _make_dynamic_state(driver_name, **kwargs):
 
 
 class ResourceTrackingWorkflow(object):
-    def __init__(self, db, context):
-        self.db = db
+    def __init__(self, context, backend_driver):
         self.context = context
         self.admin_context = context.elevated()
+        self.backend_driver = backend_driver
 
     def _get_history(self, resource):
         # TODO(harlowja): get the list of workflows + states already performed
         # on this resource...
-        actions = self.db.resource_tracker_actions_get(self.admin_context,
-                                                       resource.tracking_id)
+        actions = self.backend_driver.resource_tracker_actions_get(
+                                                        self.admin_context,
+                                                        resource.tracking_id)
         LOG.debug(_("Getting the state history of %s"), resource.tracking_id)
         LOG.debug(_("The state history is %s"), actions)
         return actions
@@ -111,7 +117,9 @@ class ResourceTrackingWorkflow(object):
             'tracking_id': resource.tracking_id,
             'status': states.STARTING,
         }
-        self.db.resource_tracker_create(self.admin_context, what_started)
+        #Store the data to the backend as per the config
+        self.backend_driver.resource_tracker_create(self.admin_context,
+                                                    what_started)
         LOG.debug(_("Starting to track request id %s fullfillment"
                     " using tracking id %s"),
                   self.admin_context.request_id, resource.tracking_id)
@@ -136,8 +144,11 @@ class ResourceTrackingWorkflow(object):
                     'action_performed': full_name,
                     'action_result': jsonutils.dumps(result),
                 }
-                self.db.resource_tracker_action_create(self.admin_context,
-                                                       what_changed)
+
+                self.backend_driver.resource_tracker_action_create(
+                                                            self.admin_context,
+                                                            what_changed)
+
                 LOG.debug(_("Saving that %(tracking_id)s completed state"
                             " %(action_performed)s with %(action_result)s"),
                           what_changed)
@@ -166,13 +177,14 @@ class ResourceTrackingWorkflow(object):
             # previously (so that it can skip).
             c.result_fetcher = result_fetcher
             # NOTE(harlowja): Allow us to persist completion events and there
-            # results to a persistant storage, so that we can keep a history
+            # results to a persistant backend, so that we can keep a history
             # of the states that have occurred (useful for resumption).
             c.change_tracker = change_tracker
             c.run(self.context, resource, *args, **kwargs)
 
     def notify(self, context, status, state_name, chain, error=None,
                result=None):
+        LOG.info(chain)
         event_type = 'orc_%s' % _get_chain_state_name(chain, state_name,
                                                       sep=".")
         payload = dict(status=status, result=result, error=error)
@@ -190,19 +202,25 @@ class OrchestrationManager(manager.Manager):
        by successful calls or unsuccessful ones."""
 
     def __init__(self, *args, **kwargs):
-        self.orc_rpcapi = orc_rpcapi.OrchestrationAPI()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
         self.network_api = network.API()
         self.volume_api = volume.API()
         self.conductor_api = conductor.API()
-
-        # TODO: this should likely not be here, but instead should be
-        # using the conductor api??
-        db_base = base.Base()
-        self.db = db_base.db
-
+        self.workflow_messaging_driver = importutils.import_object(
+                                  CONF.orchestration.workflow_messaging_driver)
+        self.backend_driver = importutils.import_object(
+                        CONF.orchestration.worfklow_persistent_backend_driver)
+        self.queue = CONF.orchestration.zookeeper_queue_path
         super(OrchestrationManager, self).__init__(*args, **kwargs)
+
+    def pre_start_hook(self, rpc_connection=None):
+        self.conn = zk.create_connection()
+        dispatcher = zk_dispatcher.ZkDispatcher([self])
+        # Share this same connection for these Consumers
+        self.conn.create_consumer(self.queue, dispatcher)
+        # Consume from all consumers in a thread
+        self.conn.consume_in_thread()
 
     # Provides a high level result oriented api while hiding all the
     # inner complexity of fulfilling a request internally via a state
@@ -289,12 +307,12 @@ class OrchestrationManager(manager.Manager):
         db_entry['compute_create'] = cs.CreateComputeEntry()
 
         # Now run this initial workflow
-        activator = ResourceTrackingWorkflow(self.db, context)
+        activator = ResourceTrackingWorkflow(context, self.backend_driver)
         activator.run([validate, db_entry], resource)
 
         # Proxy to the real orc-api to get the rest of the work done...
-        self.orc_rpcapi.reserve_and_provision_resources(context,
-                                                        resource.to_dict())
+        self.workflow_messaging_driver.reserve_and_provision_resources(context,
+                                                           resource.to_dict())
 
         return (resource.instances, resource.tracking_id)
 
@@ -332,7 +350,7 @@ class OrchestrationManager(manager.Manager):
         reserve_volumes_driver = CONF.orchestration.reserve_volumes_driver
         reserve['volumes'] = _make_dynamic_state(reserve_volumes_driver,
                                                  **make_state_args)
-        activator = ResourceTrackingWorkflow(self.db, context)
+        activator = ResourceTrackingWorkflow(context, self.backend_driver)
         activator.run([reserve], resource)
 
         # Now start to form the document that will say what is provisioned..
@@ -372,7 +390,7 @@ class OrchestrationManager(manager.Manager):
         provision['instances'] = _make_dynamic_state(
                                                     provision_instances_driver,
                                                     **make_state_args)
-        activator = ResourceTrackingWorkflow(self.db, context)
+        activator = ResourceTrackingWorkflow(context, self.backend_driver)
         activator.run([provision], resource, provision_doc)
 
         # Now we need a state to wait for verifification that these instances
@@ -380,5 +398,6 @@ class OrchestrationManager(manager.Manager):
         # done.
         validation = states.StateChain('validation', parents=[provision])
         validation['ensure_booted'] = cs.ValidateBooted(**make_state_args)
-        activator = ResourceTrackingWorkflow(self.db, context)
-        activator.run([validation], resource, provision_doc)
+        activator = ResourceTrackingWorkflow(context, self.backend_driver)
+        activator.run([validation], resource, provision_doc,
+                      self.backend_driver)

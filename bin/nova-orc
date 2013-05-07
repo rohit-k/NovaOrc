@@ -15,8 +15,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Starter script for Nova Conductor."""
+"""Starter script for Nova Orchestration."""
 
+import contextlib
 import eventlet
 eventlet.monkey_patch()
 
@@ -34,6 +35,7 @@ if os.path.exists(os.path.join(possible_topdir, 'nova', '__init__.py')):
 
 from nova import config
 from nova.openstack.common import log as logging
+from nova.openstack.common import importutils
 from nova import service
 from nova import utils
 from oslo.config import cfg
@@ -42,12 +44,14 @@ CONF = cfg.CONF
 CONF.import_opt('topic', 'nova.orc.opts', group='orchestration')
 CONF.import_opt('manager', 'nova.orc.opts', group='orchestration')
 
+
 if __name__ == '__main__':
     config.parse_args(sys.argv)
     logging.setup("nova")
     utils.monkey_patch()
+
     server = service.Service.create(binary='nova-orc',
-                                    topic=CONF.orchestration.topic,
-                                    manager=CONF.orchestration.manager)
+        topic=CONF.orchestration.topic,
+        manager=CONF.orchestration.manager)
     service.serve(server)
     service.wait()

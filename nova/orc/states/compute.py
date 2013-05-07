@@ -3,7 +3,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 #    Copyright (c) 2013 Yahoo! Inc. All Rights Reserved.
-#    Copyright (c) 2013 NTT Data. All Rights Reserved.
+#    Copyright 2013 NTT Data.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -53,7 +53,7 @@ validate_boot_opts = [
         default=900,
         help='Time in seconds to check if instance is in ACTIVE state.'),
     cfg.IntOpt('validate_boot_check_interval',
-        default=1,
+        default=10,
         help='Time interval in seconds to sleep until timeout'),
 ]
 
@@ -149,7 +149,9 @@ class ValidateResourceImage(states.ResourceUsingState):
         if resource.image_href:
             (image_service, image_id) = glance.get_remote_image_service(
                                                  context, resource.image_href)
-            resource.image = image_service.show(context, image_id)
+            resource.image = jsonutils.to_primitive(image_service.show(
+                                                                    context,
+                                                                    image_id))
             if resource.image['status'] != 'active':
                 raise exception.ImageNotActive(image_id=image_id)
         else:
@@ -658,7 +660,8 @@ class CreateComputeEntry(states.ResourceUsingState):
 
 class ValidateBooted(states.ResourceUsingState):
 
-    def apply(self, context, resource, provision_doc, **kwargs):
+    def apply(self, context, resource, provision_doc, backend_driver):
+
         # TODO: Wait a given amount of time, periodically checking the database
         # to see if the instance has came online, if after X amount of time
         # it has not came online then ack the hypervisor directly to check
@@ -681,8 +684,9 @@ class ValidateBooted(states.ResourceUsingState):
                 all_instances_active = True
                 LOG.debug("All instances ACTIVE. Request tracking %s complete",
                            resource.tracking_id)
-                self.db.resource_tracker_update(context, resource.tracking_id,
-                                                {'status': states.COMPLETED})
+                backend_driver.resource_tracker_update(context,
+                                                  resource.tracking_id,
+                                                  {'status': states.COMPLETED})
                 break
 
             time.sleep(check_interval)

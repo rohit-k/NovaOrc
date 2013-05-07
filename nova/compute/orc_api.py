@@ -15,7 +15,7 @@
 """Handles all requests to the orchestration service."""
 
 from nova.compute import api as compute_api
-from nova.orc import rpcapi as orc_rpcapi
+from nova.orc.messaging import rpcapi as orc_rpcapi
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)

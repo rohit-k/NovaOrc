@@ -18,9 +18,9 @@
 
 from oslo.config import cfg
 
-from nova import exception
 from nova.compute import power_state
 from nova.compute import vm_states
+from nova import exception
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.orc import states
@@ -41,7 +41,7 @@ LOG = logging.getLogger(__name__)
 
 
 class ReserveInstancesDriver(states.ResourceUsingState):
-    """Driver that implements instance reservation with a number of retries"""
+    """Driver that implements instance reservation with a number of retries."""
     def apply(self, context, resource, *args, **kwargs):
         desired_instances = resource.max_count
         inst_host_map = {}

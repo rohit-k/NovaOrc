@@ -20,12 +20,12 @@ import abc
 import copy
 
 try:
-    from collections import OrderedDict
+    import collections.OrderedDict as OrderedDict
 except ImportError:
-    from ordereddict import OrderedDict
+    import ordereddict.OrderedDict as OrderedDict
 
-from nova import exception as excp
 from nova.db import base
+from nova import exception as excp
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 
@@ -74,7 +74,7 @@ class StateChain(object):
                 with excutils.save_and_reraise_exception():
                     try:
                         self._on_state_error(context, name, ex)
-                    except:
+                    except Exception:
                         pass
                     cause = (name, performer, (args, kwargs))
                     self.rollback(context, name, self, ex, cause)
@@ -113,9 +113,10 @@ class StateChain(object):
                 #           chain validation due to nova exception
                 # WARN: Failed rolling back stage 2 (create_db_entry) of
                 #       chain init_db_entry due to nova exception
-                msg = _("Failed rolling back stage %s (%s)"
-                        " of chain %s due to nova exception.")
-                LOG.warn(msg, (i + 1), performer.name, self.name)
+                msg = _("Failed rolling back stage %(stage)s (%(performer)s)"
+                        " of chain %(name)s due to nova exception.")
+                LOG.warn(msg, {'stage': (i + 1), 'performer': performer.name,
+                               'name': self.name})
                 if not self.tolerant:
                     # This will log a msg AND re-raise the Nova exception if
                     # the chain does not tolerate exceptions
@@ -125,9 +126,10 @@ class StateChain(object):
                 #           chain validation due to unknown exception
                 #     WARN: Failed rolling back stage 2 (create_db_entry) of
                 #           chain init_db_entry due to unknown exception
-                msg = _("Failed rolling back stage %s (%s)"
-                        " of chain %s, due to unknown exception.")
-                LOG.warn(msg, (i + 1), performer.name, self.name)
+                msg = _("Failed rolling back stage %(stage)s (%(performer)s)"
+                        " of chain %(name)s due to nova exception.")
+                LOG.warn(msg, {'stage': (i + 1), 'performer': performer.name,
+                               'name': self.name})
                 if not self.tolerant:
                     # Log a msg AND re-raise the generic Exception if the
                     # Chain does not tolerate exceptions

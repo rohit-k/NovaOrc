@@ -19,14 +19,14 @@
 
 from nova.db import base
 from nova.openstack.common import log as logging
-from nova.orc.backends.driver import WorkflowPersistentBackendDriver
+from nova.orc.backends import driver
 
 
 LOG = logging.getLogger(__name__)
 
 
-class SqlDriver(WorkflowPersistentBackendDriver):
-    """Driver that stores data to the db"""
+class SqlDriver(driver.WorkflowPersistentBackendDriver):
+    """Driver that stores data to the db."""
     def __init__(self, **kwargs):
         db_base = base.Base()
         self.db = db_base.db

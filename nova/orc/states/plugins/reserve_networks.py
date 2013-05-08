@@ -17,8 +17,8 @@
 # under the License.
 
 from nova.cloudpipe import pipelib
-from nova.compute import vm_states
 from nova.compute import task_states
+from nova.compute import vm_states
 from nova.network.security_group import openstack_driver
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging

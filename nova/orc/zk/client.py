@@ -23,8 +23,6 @@ from eventlet import greenpool
 from eventlet import pools
 from eventlet import semaphore
 
-
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import local
 from nova.openstack.common import log as logging
 from nova.orc.zk import common as zk_common
@@ -63,7 +61,7 @@ class Pool(pools.Pool):
 
 
 class ZkContext(zk_common.CommonZkContext):
-    """Context that supports replying to a rpc.call"""
+    """Context that supports replying to a rpc.call."""
     def __init__(self, **kwargs):
         self.msg_id = kwargs.pop('msg_id', None)
         self.reply_q = kwargs.pop('reply_q', None)
@@ -134,7 +132,7 @@ class ConnectionContext(zk_common.Connection):
     """
 
     def __init__(self, conf, connection_pool, pooled=True, server_params=None):
-        """Create a new connection, or get one from the pool"""
+        """Create a new connection, or get one from the pool."""
         self.connection = None
         self.conf = conf
         self.connection_pool = connection_pool
@@ -146,7 +144,7 @@ class ConnectionContext(zk_common.Connection):
         self.pooled = pooled
 
     def __enter__(self):
-        """When with ConnectionContext() is used, return self"""
+        """When with ConnectionContext() is used, return self."""
         return self
 
     def _done(self):
@@ -185,7 +183,7 @@ class ConnectionContext(zk_common.Connection):
         self.connection.consume_in_thread()
 
     def __getattr__(self, key):
-        """Proxy all other calls to the Connection instance"""
+        """Proxy all other calls to the Connection instance."""
         if self.connection:
             return getattr(self.connection, key)
         else:
@@ -283,32 +281,30 @@ def put_message_in_queue(conf, context, queue, msg, connection_pool):
 
 
 def create_node(conf, context, path, data, connection_pool):
-    """create a node with the given value as its data."""
+    """Create a node with the given value as its data."""
     pack_context(data, context)
     with ConnectionContext(conf, connection_pool) as conn:
         conn.create_node(path, zk_common.serialize_msg(data))
 
 
 def get_children(conf, context, path, connection_pool):
-    """Returns the children of the given node"""
-    #LOG.info(_('Getting the children of the node'), path)
+    """Returns the children of the given node."""
     with ConnectionContext(conf, connection_pool) as conn:
         return conn.get_children(path)
 
 
 def get_data(conf, context, path, connection_pool):
-    """Gets the data from the given path/node"""
-    #LOG.info(_('Getting the data present at the node'), path)
+    """Gets the data from the given path/node."""
     with ConnectionContext(conf, connection_pool) as conn:
         return conn.get_data(path)
 
 
 def set_data(conf, context, path, data, connection_pool):
-    """set the data of a node"""
+    """Set the data of a node."""
     with ConnectionContext(conf, connection_pool) as conn:
         return conn.set_data(path, data)
 
 
 def create_connection(conf, new, connection_pool):
-    """Create a connection"""
+    """Create a connection to zookeeper."""
     return ConnectionContext(conf, connection_pool, pooled=not new)

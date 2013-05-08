@@ -27,13 +27,13 @@ from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.notifier import api as notifier
-from nova.orc import states
 from nova.orc.resources import compute as compute_resource
+from nova.orc import states
 from nova.orc.states import compute as cs
 from nova.orc import zk
 from nova.orc.zk import dispatcher as zk_dispatcher
-from nova import utils
 from nova.scheduler import rpcapi as scheduler_rpcapi
+from nova import utils
 from nova import volume
 
 
@@ -120,9 +120,9 @@ class ResourceTrackingWorkflow(object):
         #Store the data to the backend as per the config
         self.backend_driver.resource_tracker_create(self.admin_context,
                                                     what_started)
-        LOG.debug(_("Starting to track request id %s fullfillment"
-                    " using tracking id %s"),
-                  self.admin_context.request_id, resource.tracking_id)
+        LOG.debug(_("Starting to track request id "
+                    "%(self.admin_context.request_id)s fullfillment using "
+                    "tracking id %(resource.tracking_id)s") % locals())
 
     def run(self, chains, resource, *args, **kwargs):
         self._initialize_resource(resource)
@@ -228,7 +228,7 @@ class OrchestrationManager(manager.Manager):
     # with future improvements to make it much more complex).
 
     def _create_resource(self, **kwargs):
-        """Return an instance of a Compute resource object"""
+        """Return an instance of a Compute resource object."""
         return compute_resource.Create(**kwargs)
 
     def fulfill_compute_create(self, context, **kwargs):

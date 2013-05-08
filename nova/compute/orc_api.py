@@ -15,8 +15,8 @@
 """Handles all requests to the orchestration service."""
 
 from nova.compute import api as compute_api
-from nova.orc.messaging import rpcapi as orc_rpcapi
 from nova.openstack.common import log as logging
+from nova.orc.messaging import rpcapi as orc_rpcapi
 
 LOG = logging.getLogger(__name__)
 
@@ -43,14 +43,14 @@ class ComputeOrchestrationAPI(compute_api.API):
 
 
 class HostAPI(compute_api.HostAPI):
-    """HostAPI() class for orchestration service"""
+    """HostAPI() class for orchestration service."""
 
     def __init__(self):
         super(HostAPI, self).__init__()
 
 
 class InstanceActionAPI(compute_api.InstanceActionAPI):
-    """InstanceActionAPI() class for orchestration service"""
+    """InstanceActionAPI() class for orchestration service."""
 
     def __init__(self):
         super(InstanceActionAPI, self).__init__()

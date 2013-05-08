@@ -31,16 +31,16 @@ class WorkflowPersistentBackendDriver(object):
         return self.__class__.__name__
 
     def resource_tracker_actions_get(self, context, data, *args, **kwargs):
-        """Must be overriden to get action performed by tracking id"""
+        """Must be overriden to get action performed by tracking id."""
         msg = _("Driver must implement this method to get actions performed")
         raise NotImplementedError(msg)
 
     def resource_tracker_create(self, context, data, *args, **kwargs):
-        """Must be overriden to store data for storage mechanism to work """
+        """Must be overriden to store data for storage mechanism to work."""
         msg = _("Driver must implement store mechanism")
         raise NotImplementedError(msg)
 
     def resource_tracker_action_create(self, context, data, *args, **kwargs):
-        """Must be overriden to store data for storage mechanism to work """
+        """Must be overriden to store data for storage mechanism to work."""
         msg = _("Driver must implement store mechanism")
         raise NotImplementedError(msg)

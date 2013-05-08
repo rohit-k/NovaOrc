@@ -29,7 +29,7 @@ LOG = logging.getLogger(__name__)
 
 
 class ProvisionVolumesDriver(states.ResourceUsingState):
-    """Driver that implements volume provisioning"""
+    """Driver that implements volume provisioning."""
     def apply(self, context, resource, provision_doc):
         instance_volume_map = provision_doc.volumes.instance_volume_map
         block_device_mapping = []

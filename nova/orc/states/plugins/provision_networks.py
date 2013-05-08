@@ -28,7 +28,7 @@ LOG = logging.getLogger(__name__)
 
 
 class ProvisionNetworksDriver(states.ResourceUsingState):
-    """Driver that implements network provisioning"""
+    """Driver that implements network provisioning."""
 
     def __init__(self, **kwargs):
         super(ProvisionNetworksDriver, self).__init__(**kwargs)

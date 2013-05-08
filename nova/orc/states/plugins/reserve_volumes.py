@@ -20,8 +20,8 @@ from eventlet import greenthread
 import time
 
 from nova import block_device
-from nova.compute import vm_states
 from nova.compute import task_states
+from nova.compute import vm_states
 from nova import exception
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging

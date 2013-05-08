@@ -30,7 +30,7 @@ LOG = logging.getLogger(__name__)
 
 
 class ProvisionInstancesDriver(states.ResourceUsingState):
-    """Driver that implements instance provisioning"""
+    """Driver that implements instance provisioning."""
 
     def __init__(self, **kwargs):
         super(ProvisionInstancesDriver, self).__init__(**kwargs)

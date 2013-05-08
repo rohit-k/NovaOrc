@@ -18,11 +18,10 @@
 
 import copy
 
-from oslo.config import cfg
 from kazoo import exceptions
-from kazoo.handlers.threading import TimeoutError
 
-from nova.openstack.common.gettextutils import _
+from oslo.config import cfg
+
 from nova.openstack.common import jsonutils
 from nova.openstack.common import local
 from nova.openstack.common import log as logging
@@ -88,7 +87,7 @@ class Timeout(exceptions.SessionExpiredError):
     This exception is raised if the rpc_response_timeout is reached while
     waiting for a response from the remote side.
     """
-    message = _("Timeout while waiting on ZooKeeper response.")
+    message = _("Timed out while waiting on ZooKeeper response.")
 
 
 class DuplicateMessageError(ZKException):
@@ -104,7 +103,7 @@ class UnsupportedZkEnvelopeVersion(ZKException):
                 "not supported by this endpoint.")
 
 
-class ClientException(TimeoutError):
+class ConnectionTimeoutError(ZKException):
     message = _("Connection Timed-out")
 
 

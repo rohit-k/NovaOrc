@@ -14,11 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-try:
-    from collections import OrderedDict
-except IOError:
-    from ordereddict import OrderedDict
-
 from migrate import ForeignKeyConstraint
 from sqlalchemy import Boolean, Column, DateTime, Index, Integer
 from sqlalchemy import MetaData, String, Table, Text

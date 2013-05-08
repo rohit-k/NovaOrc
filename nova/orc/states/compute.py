@@ -38,8 +38,8 @@ from nova.network.security_group import openstack_driver
 from nova import notifications
 from nova.openstack.common import excutils
 from nova.openstack.common import jsonutils
-from nova.openstack.common import timeutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova.orc import states
 from nova.orc import utils as orc_utils
 import nova.policy
@@ -175,7 +175,7 @@ class ValidateResourceImage(states.ResourceUsingState):
 
 
 class ValidateResourceRequest(states.ResourceUsingState):
-    """Validate request parameters for quota reservations etc"""
+    """Validate request parameters for quota reservations etc."""
 
     def _check_num_instances_quota(self, context, instance_type, min_count,
                                    max_count):
@@ -662,12 +662,6 @@ class ValidateBooted(states.ResourceUsingState):
 
     def apply(self, context, resource, provision_doc, backend_driver):
 
-        # TODO: Wait a given amount of time, periodically checking the database
-        # to see if the instance has came online, if after X amount of time
-        # it has not came online then ack the hypervisor directly to check
-        # if its online, if that doesn't work, bail out by performing different
-        # types of reconciliation in the revert method here...
-
         timeout = CONF.orchestration.validate_boot_timeout
         check_interval = CONF.orchestration.validate_boot_check_interval
         provisioning_result = provision_doc.instances.instance_host_map
@@ -697,11 +691,11 @@ class ValidateBooted(states.ResourceUsingState):
         return orc_utils.DictableObject()
 
     def revert(self, context, result, chain, excp, cause):
-        # TODO: perform different types of reconciliation here, possibly a
-        # dynamic driver can be loaded that will be given an instance and where
-        # it was supposed to be and ask said driver to resolve what to do, the
-        # driver could return codes like PASS, REVERT_ALL, etc, where PASS
-        # would mean to just leave it alone (likely in error state) and
-        # REVERT_ALL would mean to start reverting all changes made
-        # (including all instances which did boot correctly...)
+        # TOD(harlowja): perform different types of reconciliation here,
+        # possibly a dynamic driver can be loaded that will be given an
+        # instance and where it was supposed to be and ask said driver to
+        # resolve what to do, the driver could return codes like PASS,
+        # REVERT_ALL, etc, where PASS would mean to just leave it alone
+        # (likely in error state) and REVERT_ALL would mean to start reverting
+        # all changes made (including all instances which did boot correctly)
         pass

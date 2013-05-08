@@ -4862,6 +4862,7 @@ def archive_deleted_rows(context, max_rows=None):
 
 @require_admin_context
 def resource_tracker_create(context, values):
+    """Create an object to track resources in a workflow."""
     resource_tracker_ref = models.ResourceTracker()
     resource_tracker_ref.update(values)
     resource_tracker_ref.save()
@@ -4870,7 +4871,7 @@ def resource_tracker_create(context, values):
 
 @require_admin_context
 def resource_tracker_action_create(context, values):
-    """Set tracking id corresponding to its action performed in the chain"""
+    """Create an object to track actions performed on a resource."""
     resource_tracker_action = models.ResourceTrackerAction()
     resource_tracker_action.update(values)
     resource_tracker_action.save()
@@ -4879,7 +4880,6 @@ def resource_tracker_action_create(context, values):
 
 @require_admin_context
 def resource_tracker_actions_get(context, tracking_id):
-
     query = model_query(context, models.ResourceTrackerAction).\
                 filter_by(tracking_id=tracking_id)
     actions = {}

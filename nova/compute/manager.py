@@ -3040,7 +3040,7 @@ class ComputeManager(manager.SchedulerDependentManager):
     @reverts_task_state
     @wrap_instance_fault
     def attach_volume_boot(self, context, instance, volume, mountpoint):
-        """Attach a volume to an instance at boot time"""
+        """Attach a volume to an instance at boot time."""
         try:
             return self._attach_volume_boot(context, instance, volume,
                                             mountpoint)

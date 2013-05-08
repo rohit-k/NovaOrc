@@ -21,8 +21,8 @@ from kazoo import exceptions
 
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.orc.backends.driver import WorkflowPersistentBackendDriver
-from nova.orc.zk.proxy import ZkProxy
+from nova.orc.backends import driver
+from nova.orc.zk import proxy
 
 
 LOG = logging.getLogger(__name__)
@@ -34,11 +34,11 @@ NODE_PREFIX = 'resource-'
 BASE_ZK_API_VERSION = '1.0'
 
 
-class ZookeeperDriver(WorkflowPersistentBackendDriver):
-    """Driver that stores data to the zk queue"""
+class ZookeeperDriver(driver.WorkflowPersistentBackendDriver):
+    """Driver that stores data to the zk queue."""
 
     def __init__(self, **kwargs):
-        self.zk = ZkProxy(QUEUES[0], BASE_ZK_API_VERSION)
+        self.zk = proxy.ZkProxy(QUEUES[0], BASE_ZK_API_VERSION)
 
     def resource_tracker_actions_get(self, context, tracking_id):
         history_path = HISTORY_PATH + '/' + tracking_id

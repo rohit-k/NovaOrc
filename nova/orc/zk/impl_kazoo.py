@@ -25,12 +25,12 @@ import time
 
 import eventlet
 import greenlet
-from kazoo.client import KazooClient
+
+import kazoo.client
 from kazoo import exceptions
-from kazoo.handlers.threading import TimeoutError
+from kazoo.handlers import threading
 from oslo.config import cfg
 
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import network_utils
 from nova.orc.zk import client as zk_client
 from nova.orc.zk import common as zk_common
@@ -64,19 +64,19 @@ LOG = zk_common.LOG
 
 
 class Publisher(object):
-    """Base Publisher class"""
+    """Base Publisher class."""
 
     def __init__(self, locking_queue):
-        """Init the Publisher class"""
+        """Init the Publisher class."""
         self.locking_queue = locking_queue
 
     def send(self, msg, priority=100):
-        """Send a message"""
+        """Send a message."""
         self.locking_queue.put(msg, priority)
 
 
 class QueuePublisher(Publisher):
-    """Publisher class for 'topic'"""
+    """Publisher class for 'topic'."""
     def __init__(self, conf, locking_queue):
         """init a 'queue' publisher.
 
@@ -136,7 +136,7 @@ class ConsumerBase(object):
             _callback(data)
 
     def cancel(self):
-        """Cancel the consuming from the queue, if it has started"""
+        """Cancel the consuming from the queue, if it has started."""
         try:
             self.queue.cancel(self.tag)
         except KeyError, e:
@@ -146,7 +146,7 @@ class ConsumerBase(object):
 
 
 class QueueConsumer(ConsumerBase):
-    """Consumer class for 'queue'"""
+    """Consumer class for 'queue'."""
 
     def __init__(self, conf, queue, callback, tag, **kwargs):
         super(QueueConsumer, self).__init__(queue,
@@ -215,15 +215,14 @@ class Connection(object):
             # Setting this in case the next statement fails, though
             # it shouldn't be doing any network operations, yet.
             self.connection = None
-        self.connection = KazooClient(CONF.zookeeper.zk_hosts)
+        self.connection = kazoo.client.KazooClient(CONF.zookeeper.zk_hosts)
         self.consumer_num = itertools.count(1)
         try:
             self.connection.start()
             LOG.info(_('Connected to Zookeeper server on '
                        '%(hostname)s:%(port)d') % params)
-        except TimeoutError:
-            raise zk_common.ClientException
-            #LOG.info(_(e.message)
+        except threading.TimeoutError:
+            raise zk_common.ConnectionTimeoutError
 
     def reconnect(self):
         """Handles reconnecting and re-establishing queues.
@@ -281,21 +280,21 @@ class Connection(object):
                     error_callback(e)
 
     def close(self):
-        """Close/release this connection"""
+        """Close/release this connection."""
         self.cancel_consumer_thread()
         self.wait_on_proxy_callbacks()
         self.connection.stop()
         self.connection = None
 
     def reset(self):
-        """Reset a connection so it can be used again"""
+        """Reset a connection so it can be used again."""
         self.cancel_consumer_thread()
         self.wait_on_proxy_callbacks()
         self.consumers = []
 
     def declare_consumer(self, consumer_cls, queue, callback):
         """Create a Consumer using the class that was passed in and
-        add it to our list of consumers
+        add it to our list of consumers.
         """
 
         def _connect_error(exc):
@@ -312,7 +311,7 @@ class Connection(object):
         return self.ensure(_connect_error, _declare_consumer)
 
     def iterconsume(self, limit=None, timeout=None):
-        """Return an iterator that will consume from all queues/consumers"""
+        """Return an iterator that will consume from all queues/consumers."""
 
         info = {'do_consume': True}
 
@@ -338,7 +337,7 @@ class Connection(object):
             yield self.ensure(_error_callback, _consume)
 
     def cancel_consumer_thread(self):
-        """Cancel a consumer thread"""
+        """Cancel a consumer thread."""
         if self.consumer_thread is not None:
             self.consumer_thread.kill()
             try:
@@ -353,7 +352,7 @@ class Connection(object):
             proxy_cb.wait()
 
     def publisher_send(self, cls, locking_queue, msg, **kwargs):
-        """Send to a publisher based on the publisher class"""
+        """Send to a publisher based on the publisher class."""
 
         def _error_callback(exc):
             log_info = {'queue': locking_queue, 'err_str': str(exc)}
@@ -372,14 +371,14 @@ class Connection(object):
                               locking_queue, callback)
 
     def put_message_in_queue(self, context, queue, msg, timeout=None):
-        """Send a 'queue' message"""
+        """Send a 'queue' message."""
         msg = json.dumps(msg)
         locking_queue = self.connection.LockingQueue(queue)
         self.publisher_send(QueuePublisher, locking_queue,
                             msg, timeout=timeout)
 
     def create_node(self, path, data):
-        """Send a 'queue' message"""
+        """Send a 'queue' message."""
         data = json.dumps(data)
 
         def _error_callback(exc):
@@ -393,7 +392,7 @@ class Connection(object):
         self.ensure(_error_callback, _create_node)
 
     def consume(self, limit=None):
-        """Consume from all queues/consumers"""
+        """Consume from all queues/consumers."""
         it = self.iterconsume(limit=limit)
         while True:
             try:
@@ -402,7 +401,7 @@ class Connection(object):
                 return
 
     def consume_in_thread(self):
-        """Consumer from all queues/consumers in a greenthread"""
+        """Consumer from all queues/consumers in a greenthread."""
         def _consumer_thread():
             try:
                 self.consume()
@@ -413,7 +412,7 @@ class Connection(object):
         return self.consumer_thread
 
     def create_consumer(self, queue, proxy):
-        """Create a consumer that calls a method in a proxy object"""
+        """Create a consumer that calls a method in a proxy object."""
         proxy_cb = zk_client.ProxyCallback(
             self.conf, proxy,
             zk_client.get_connection_pool(self.conf, Connection))
@@ -423,7 +422,7 @@ class Connection(object):
         self.declare_queue_consumer(locking_queue, proxy_cb)
 
     def get_children(self, path):
-        """Get the children of the given path"""
+        """Get the children of the given path."""
         def _error_callback(exc):
             log_info = {'path': path, 'err_str': str(exc)}
             LOG.exception(_("Could not get the child nodes from path"
@@ -435,7 +434,7 @@ class Connection(object):
         return self.ensure(_error_callback, _get_children)
 
     def get_data(self, path):
-        """Get the data from the given path/node"""
+        """Get the data from the given path/node."""
         def _error_callback(exc):
             log_info = {'path': path, 'err_str': str(exc)}
             LOG.exception(_("Could not get value from path"
@@ -462,7 +461,7 @@ class Connection(object):
 
 
 def create_connection(conf, new=True):
-    """Create a connection"""
+    """Create a connection."""
     return zk_client.create_connection(conf, new,
                               zk_client.get_connection_pool(conf, Connection))
 
@@ -481,19 +480,19 @@ def create_node(conf, context, path, data):
 
 
 def get_children(conf, context, path):
-    """Get the children of the given node"""
+    """Get the children of the given node."""
     return zk_client.get_children(conf, context, path,
                                   zk_client.get_connection_pool(conf,
                                                                 Connection))
 
 
 def get_data(conf, context, path):
-    """Get the data from the given node/path"""
+    """Get the data from the given node/path."""
     return zk_client.get_data(conf, context, path,
                             zk_client.get_connection_pool(conf, Connection))
 
 
 def set_data(conf, context, path, data):
-    """set the data of a node"""
+    """set the data of a node."""
     return zk_client.set_data(conf, context, path, data,
                             zk_client.get_connection_pool(conf, Connection))

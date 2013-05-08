@@ -660,7 +660,7 @@ class CreateComputeEntry(states.ResourceUsingState):
 
 class ValidateBooted(states.ResourceUsingState):
 
-    def apply(self, context, resource, provision_doc, backend_driver):
+    def apply(self, context, resource, provision_doc):
 
         timeout = CONF.orchestration.validate_boot_timeout
         check_interval = CONF.orchestration.validate_boot_check_interval
@@ -678,7 +678,7 @@ class ValidateBooted(states.ResourceUsingState):
                 all_instances_active = True
                 LOG.debug("All instances ACTIVE. Request tracking %s complete",
                            resource.tracking_id)
-                backend_driver.resource_tracker_update(context,
+                self.backend_driver.resource_tracker_update(context,
                                                   resource.tracking_id,
                                                   {'status': states.COMPLETED})
                 break

@@ -95,8 +95,6 @@ class ResourceTrackingWorkflow(object):
         self.backend_driver = backend_driver
 
     def _get_history(self, resource):
-        # TODO(harlowja): get the list of workflows + states already performed
-        # on this resource...
         actions = self.backend_driver.resource_tracker_actions_get(
                                                         self.admin_context,
                                                         resource.tracking_id)
@@ -121,8 +119,10 @@ class ResourceTrackingWorkflow(object):
         self.backend_driver.resource_tracker_create(self.admin_context,
                                                     what_started)
         LOG.debug(_("Starting to track request id "
-                    "%(self.admin_context.request_id)s fullfillment using "
-                    "tracking id %(resource.tracking_id)s") % locals())
+                    "%(request_id)s fullfillment using tracking id"
+                    " %(tracking_id)s"),
+                    {'request_id': self.admin_context.request_id,
+                     'tracking_id': resource.tracking_id})
 
     def run(self, chains, resource, *args, **kwargs):
         self._initialize_resource(resource)
@@ -330,6 +330,7 @@ class OrchestrationManager(manager.Manager):
             'volume_api': self.volume_api,
             'network_api': self.network_api,
             'compute_rpcapi': self.compute_rpcapi,
+            'backend_driver': self.backend_driver,
         }
 
         # Start filling in the parts of the final provision document
@@ -399,5 +400,4 @@ class OrchestrationManager(manager.Manager):
         validation = states.StateChain('validation', parents=[provision])
         validation['ensure_booted'] = cs.ValidateBooted(**make_state_args)
         activator = ResourceTrackingWorkflow(context, self.backend_driver)
-        activator.run([validation], resource, provision_doc,
-                      self.backend_driver)
+        activator.run([validation], resource, provision_doc)

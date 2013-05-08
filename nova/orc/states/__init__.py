@@ -20,9 +20,11 @@ import abc
 import copy
 
 try:
-    import collections.OrderedDict as OrderedDict
+    import collections
+    ordered_dict = collections.OrderedDict
 except ImportError:
-    import ordereddict.OrderedDict as OrderedDict
+    import ordereddict
+    ordered_dict = ordereddict.OrderedDict
 
 from nova.db import base
 from nova import exception as excp
@@ -42,8 +44,8 @@ class StateChain(object):
         self.reversions = []
         self.name = name
         self.tolerant = tolerant
-        self.states = OrderedDict()
-        self.results = OrderedDict()
+        self.states = ordered_dict()
+        self.results = ordered_dict()
         self.parents = parents
         self.result_fetcher = None
         self.change_tracker = None
@@ -166,3 +168,4 @@ class ResourceUsingState(State):
         self.network_api = kwargs.get("network_api")
         self.scheduler_rpcapi = kwargs.get("scheduler_rpcapi")
         self.volume_api = kwargs.get("volume_api")
+        self.backend_driver = kwargs.get("backend_driver")
